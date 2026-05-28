@@ -89,3 +89,110 @@ pre {
   border-radius: 12px;
   border: 1px solid #374151;
 }
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.card {
+  background: #1f2937;
+  border: 1px solid #4b5563;
+  border-radius: 8px;
+  padding: 16px;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  border-color: #2563eb;
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.2);
+}
+
+.card-title {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #f9fafb;
+}
+
+.card-field {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.card-label {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.card-value {
+  color: #d1d5db;
+  text-align: right;
+  word-break: break-word;
+  max-width: 150px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: #2563eb;
+  color: #f9fafb;
+  margin-right: 4px;
+  margin-bottom: 4px;
+}
+
+.badge-success {
+  background: #10b981;
+}
+
+.badge-warning {
+  background: #f59e0b;
+}
+
+.badge-danger {
+  background: #ef4444;
+}
+
+.badge-info {
+  background: #06b6d4;
+}
+
+.table-responsive {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #374151;
+}
+
+th {
+  background: #111827;
+  font-weight: 600;
+  color: #9ca3af;
+}
+
+tr:hover {
+  background: #111827;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 24px;
+  color: #9ca3af;
+}

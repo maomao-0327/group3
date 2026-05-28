@@ -18,6 +18,28 @@ export type RoomPayload = {
   availableSlots: AvailabilitySlot[];
 };
 
+// サーバーから取得するデータ型（ID付き）
+export type User = UserPayload & { id: string };
+export type Room = RoomPayload & { id: string };
+
+export type Match = {
+  id: string;
+  student: User;
+  professor: User;
+  room: Room;
+  matchedGame: string;
+  slot: AvailabilitySlot;
+};
+
+// マッチング提案用の型
+export type MatchSuggestion = {
+  studentId: string;
+  professorId: string;
+  roomId?: string;
+  gameOptions: string[];
+  availability: AvailabilitySlot[];
+};
+
 export const api = {
   fetchJson: async <T>(path: string, init?: RequestInit): Promise<T> => {
     const res = await fetch(path, {
@@ -30,21 +52,23 @@ export const api = {
     }
     return res.json();
   },
-  getUsers: () => api.fetchJson<any[]>("/api/users"),
-  getRooms: () => api.fetchJson<any[]>("/api/rooms"),
-  getMatches: () => api.fetchJson<any[]>("/api/matches"),
+  getUsers: () => api.fetchJson<User[]>("/api/users"),
+  getRooms: () => api.fetchJson<Room[]>("/api/rooms"),
+  getMatches: () => api.fetchJson<Match[]>("/api/matches"),
+  getSuggestions: () =>
+    api.fetchJson<MatchSuggestion[]>("/api/matches/suggestions"),
   registerUser: (payload: UserPayload) =>
-    api.fetchJson<any>("/api/users/register", {
+    api.fetchJson<User>("/api/users/register", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   createRoom: (payload: RoomPayload) =>
-    api.fetchJson<any>("/api/rooms", {
+    api.fetchJson<Room>("/api/rooms", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  createMatch: (payload: { studentId: string; professorId: string }) =>
-    api.fetchJson<any>("/api/matches", {
+  createMatch: (payload: { studentId: string; professorId: string; roomId?: string; matchedGame?: string }) =>
+    api.fetchJson<Match>("/api/matches", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
