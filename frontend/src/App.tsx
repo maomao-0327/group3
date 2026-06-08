@@ -1,15 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, AvailabilitySlot, RoomPayload, UserPayload, MatchSuggestion } from "./api";
 
 // 大学の標準的な時限定義
 const TIME_SLOTS = [
-  { id: "1", label: "1限", start: "08:40", end: "9:5" },
+  { id: "1", label: "1限", start: "08:40", end: "09:55" },
   { id: "2", label: "2限", start: "10:10", end: "11:25" },
   { id: "3", label: "3限", start: "12:15", end: "13:30" },
   { id: "4", label: "4限", start: "13:45", end: "15:00" },
   { id: "5", label: "5限", start: "15:15", end: "16:30" },
   { id: "6", label: "6限", start: "16:45", end: "18:00" },
-  { id: "7", label: "放課後", start: "18:10", end: "19:10" },
+  { id: "7", label: "放課後", start: "18:40", end: "21:10" },
+];
+
+const BREAK_TIME_SLOTS = [
+  { id: "1", label: "1限の休み時間", start: "09:55", end: "10:10" },
+  { id: "2", label: "2限の休み時間", start: "11:25", end: "12:10" },
+  { id: "3", label: "3限の休み時間", start: "13:30", end: "13:40" },
+  { id: "4", label: "4限の休み時間", start: "15:00", end: "15:15" },
+  { id: "5", label: "5限の休み時間", start: "16:30", end: "16:45" },
+  { id: "6", label: "6限の休み時間", start: "18:00", end: "18:15" },
 ];
 
 const DAYS = [
@@ -47,6 +56,30 @@ function App() {
 
   const [selectedSuggestion, setSelectedSuggestion] = useState<MatchSuggestion | null>(null);
   const [selectedGame, setSelectedGame] = useState<string>("");
+  const [userSlotGroup, setUserSlotGroup] = useState<"class" | "break">("class");
+  const [roomSlotGroup, setRoomSlotGroup] = useState<"class" | "break">("class");
+  const [view, setView] = useState<"dashboard" | "waiting" | "event">("dashboard");
+  const [waitCount, setWaitCount] = useState<number>(0);
+  const [matchedPeople, setMatchedPeople] = useState<string[]>([]);
+  const waitingTimerRef = useRef<number | null>(null);
+  const [eventDetail] = useState({
+    id: "event-01",
+    title: "麻雀会：Mon3・3A201",
+    location: "3A201",
+    time: "18:30 - 21:00",
+    participants: ["太郎", "花子", "教授A"],
+  });
+
+  const userSlots = userSlotGroup === "class" ? TIME_SLOTS : BREAK_TIME_SLOTS;
+  const roomSlots = roomSlotGroup === "class" ? TIME_SLOTS : BREAK_TIME_SLOTS;
+
+  const placeholderParticipants = ["太郎", "花子", "次郎", "三郎"];
+  const buildMatchedParticipants = (count: number) => {
+    const actual = users.map((user) => user.nickname || `User${user.id}`).slice(0, count);
+    return [...actual, ...placeholderParticipants].slice(0, count);
+  };
+
+  type SlotDefinition = typeof TIME_SLOTS[number];
 
   const studentOptions = useMemo(
     () => users.filter((user) => user.role === "student"),
@@ -182,15 +215,154 @@ function App() {
     });
   };
 
-  const handleTimeSlotChange = (slot: (typeof TIME_SLOTS)[0]) => {
+  const handleTimeSlotChange = (slot: SlotDefinition) => {
     updateAvailability(slot.start, 0, "start");
     updateAvailability(slot.end, 0, "end");
   };
 
-  const handleRoomTimeSlotChange = (slot: (typeof TIME_SLOTS)[0]) => {
+  const handleRoomTimeSlotChange = (slot: SlotDefinition) => {
     updateRoomAvailability(slot.start, 0, "start");
     updateRoomAvailability(slot.end, 0, "end");
   };
+
+  useEffect(() => {
+    return () => {
+      if (waitingTimerRef.current !== null) {
+        clearInterval(waitingTimerRef.current);
+      }
+    };
+  }, []);
+
+  const startMatchWaiting = () => {
+    if (view === "waiting") {
+      return;
+    }
+
+    setView("waiting");
+    setWaitCount(0);
+    setMatchedPeople([]);
+    setStatusMessage("マッチング待機中... 4人揃うまでお待ちください。");
+
+    if (waitingTimerRef.current !== null) {
+      clearInterval(waitingTimerRef.current);
+    }
+
+    waitingTimerRef.current = window.setInterval(() => {
+      setWaitCount((prevCount) => {
+        const nextCount = Math.min(prevCount + 1, 4);
+        setMatchedPeople(buildMatchedParticipants(nextCount));
+
+        if (nextCount < 4) {
+          setStatusMessage(`${nextCount}人がマッチングしました。あと${4 - nextCount}人です。`);
+        } else {
+          setStatusMessage("4人揃いました！イベント詳細画面に移動します。");
+          if (waitingTimerRef.current !== null) {
+            clearInterval(waitingTimerRef.current);
+            waitingTimerRef.current = null;
+          }
+          setTimeout(() => {
+            setView("event");
+          }, 1200);
+        }
+
+        return nextCount;
+      });
+    }, 1200);
+  };
+
+  const backToDashboard = () => {
+    if (waitingTimerRef.current !== null) {
+      clearInterval(waitingTimerRef.current);
+      waitingTimerRef.current = null;
+    }
+    setView("dashboard");
+    setStatusMessage("");
+  };
+
+  if (view === "waiting") {
+    return (
+      <div className="app">
+        <header>
+          <h1>Classroom Match</h1>
+          <p>4人マッチングを待機しています。</p>
+        </header>
+        <section>
+          <div className="transition-card">
+            <div className="card-title">待機画面</div>
+            <div className="card-field" style={{ justifyContent: "flex-start", gap: "12px" }}>
+              <span className="badge badge-info">{waitCount < 4 ? "待機中" : "完了"}</span>
+              <span>
+                {waitCount < 4
+                  ? `${waitCount}人がマッチングしました。あと ${4 - waitCount} 人です。`
+                  : "4人揃いました。イベント詳細に移動します。"}
+              </span>
+            </div>
+            <div className="progress-bar">
+              <div className={`progress-fill ${waitCount === 4 ? "progress-filled" : ""}`} style={{ width: `${(waitCount / 4) * 100}%` }} />
+            </div>
+            {matchedPeople.length > 0 && (
+              <div style={{ marginTop: "12px" }}>
+                <span className="card-label">マッチングした人</span>
+                <div className="chip-group">
+                  {matchedPeople.map((participant) => (
+                    <span key={participant} className="badge badge-success">
+                      {participant}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            <button type="button" onClick={backToDashboard} className="button-secondary">
+              ホームに戻る
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (view === "event") {
+    return (
+      <div className="app">
+        <header>
+          <h1>Classroom Match</h1>
+          <p>マッチングが完了しました。イベント詳細を確認してください。</p>
+        </header>
+        <section>
+          <div className="event-detail-card">
+            <div className="card-title">イベント詳細</div>
+            <div className="card-field">
+              <span className="card-label">イベント</span>
+              <span className="card-value">{eventDetail.title}</span>
+            </div>
+            <div className="card-field">
+              <span className="card-label">場所</span>
+              <span className="card-value">{eventDetail.location}</span>
+            </div>
+            <div className="card-field">
+              <span className="card-label">時間</span>
+              <span className="card-value">{eventDetail.time}</span>
+            </div>
+            <div className="card-field" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+              <span className="card-label">参加者</span>
+              <div style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {(matchedPeople.length > 0 ? matchedPeople : eventDetail.participants).map((participant) => (
+                  <span key={participant} className="badge badge-success">
+                    {participant}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginTop: "20px", display: "flex", gap: "12px", flexWrap: "wrap" }}>
+              <button type="button" onClick={backToDashboard} className="button-secondary">
+                ホームに戻る
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -260,21 +432,30 @@ function App() {
           </div>
 
           <div>
-            <label>時限を選択</label>
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
-              {TIME_SLOTS.map((slot) => (
+            <label>時間帯を選択</label>
+            <div className="button-group" style={{ marginBottom: "18px" }}>
+              <button
+                type="button"
+                className={`button-chip ${userSlotGroup === "class" ? "selected" : ""}`}
+                onClick={() => setUserSlotGroup("class")}
+              >
+                通常時間
+              </button>
+              <button
+                type="button"
+                className={`button-chip ${userSlotGroup === "break" ? "selected" : ""}`}
+                onClick={() => setUserSlotGroup("break")}
+              >
+                休み時間
+              </button>
+            </div>
+            <div className="button-group">
+              {userSlots.map((slot) => (
                 <button
                   key={slot.id}
                   type="button"
+                  className={`button-chip ${userForm.availability[0].start === slot.start ? "selected" : ""}`}
                   onClick={() => handleTimeSlotChange(slot)}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: "4px",
-                    border: userForm.availability[0].start === slot.start ? "2px solid #2563eb" : "1px solid #4b5563",
-                    background: userForm.availability[0].start === slot.start ? "#2563eb" : "#111827",
-                    color: "#f9fafb",
-                    cursor: "pointer",
-                  }}
                 >
                   {slot.label}
                 </button>
@@ -339,21 +520,30 @@ function App() {
           </div>
 
           <div>
-            <label>時限を選択</label>
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
-              {TIME_SLOTS.map((slot) => (
+            <label>時間帯を選択</label>
+            <div className="button-group" style={{ marginBottom: "18px" }}>
+              <button
+                type="button"
+                className={`button-chip ${roomSlotGroup === "class" ? "selected" : ""}`}
+                onClick={() => setRoomSlotGroup("class")}
+              >
+                通常時間
+              </button>
+              <button
+                type="button"
+                className={`button-chip ${roomSlotGroup === "break" ? "selected" : ""}`}
+                onClick={() => setRoomSlotGroup("break")}
+              >
+                休み時間
+              </button>
+            </div>
+            <div className="button-group">
+              {roomSlots.map((slot) => (
                 <button
                   key={slot.id}
                   type="button"
+                  className={`button-chip ${roomForm.availableSlots[0].start === slot.start ? "selected" : ""}`}
                   onClick={() => handleRoomTimeSlotChange(slot)}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: "4px",
-                    border: roomForm.availableSlots[0].start === slot.start ? "2px solid #2563eb" : "1px solid #4b5563",
-                    background: roomForm.availableSlots[0].start === slot.start ? "#2563eb" : "#111827",
-                    color: "#f9fafb",
-                    cursor: "pointer",
-                  }}
                 >
                   {slot.label}
                 </button>
@@ -369,11 +559,16 @@ function App() {
       <section>
         <h2>自動マッチング</h2>
         <p>条件が合うペアの提案を表示します。</p>
-        <button type="button" onClick={loadSuggestions} disabled={loading}>
-          マッチング候補を探す
-        </button>
+        <div className="button-group" style={{ marginBottom: "16px" }}>
+          <button type="button" onClick={loadSuggestions} disabled={loading}>
+            マッチング候補を探す
+          </button>
+          <button type="button" onClick={startMatchWaiting} disabled={loading} className="button-secondary">
+            マッチングを開始
+          </button>
+        </div>
 
-        {showSuggestions && suggestions.length > 0 && (
+        {view === "dashboard" && showSuggestions && suggestions.length > 0 && (
           <div style={{ marginTop: "20px" }}>
             <h3>マッチング候補 ({suggestions.length}件)</h3>
             <div className="card-grid">
