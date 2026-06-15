@@ -256,3 +256,18 @@ def get_event_members_with_name(event_id):
     conn.close()
 
     return members
+
+# db.py の末尾に追加 sihmu
+def reset_all_data():
+    """仕様書『8. データ管理』に基づく、全データの一括リセット（履歴保存なし）"""
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    tables = ["users", "user_hobbies", "user_free_times", "events", "event_members"]
+    for table in tables:
+        cur.execute(f"DELETE FROM {table}")
+        # ついでに自動連番(AUTOINCREMENT)のカウンターもリセット
+        cur.execute(f"DELETE FROM sqlite_sequence WHERE name='{table}'")
+        
+    conn.commit()
+    conn.close()
