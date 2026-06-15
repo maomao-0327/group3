@@ -1,0 +1,8 @@
+{
+  "role": "student",
+  "nickname": "プレイヤーA",
+  "games": ["ボードゲーム", "ビデオゲーム"],
+  "availability": [
+    {"day":"Mon","start":"18:00","end":"20:00"}
+  ]
+}
