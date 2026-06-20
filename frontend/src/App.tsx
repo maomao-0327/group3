@@ -43,17 +43,26 @@ const HOBBY_TAG_GROUPS = [
   },
 ];
 
-// トースト通知の型定義
 type Toast = {
   id: number;
   message: string;
   type: "success" | "error" | "info";
 };
 
+// チャットメッセージの型定義
+type ChatMessage = {
+  id: number;
+  sender: string;
+  text: string;
+  time: string;
+};
+
 function App() {
   const [users, setUsers] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
-  const [suggestions, setSuggestions] = useState<MatchSuggestion[]>([]);
+  
+  // フラットな全般レコメンド用の提案ステート
+  const [customSuggestions, setCustomSuggestions] = useState<any[]>([]);
 
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -64,22 +73,25 @@ function App() {
   const [matchedPeople, setMatchedPeople] = useState<string[]>([]);
 
   const [otherTagInput, setOtherTagInput] = useState<string>("");
-
-  // "none" | "standard" | "custom"
   const [activeModal, setActiveModal] = useState<"none" | "standard" | "custom">("none");
 
-  // セレクトボックス選択値の一時ステート
   const [selectedDay, setSelectedDay] = useState<string>("Mon");
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number>(0);
 
-  // カスタム自由入力値の一時ステート
   const [customDay, setCustomDay] = useState<string>("Mon");
   const [customTimeText, setCustomTimeText] = useState<string>("");
 
-  // トースト一覧を管理するState
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // ページ再読み込み時にも削除状態を記憶しておくための仕組み
+  // 検索・フィルタ用ステート
+  const [filterGameSearch, setFilterGameSearch] = useState<string>("");
+  const [filterDay, setFilterDay] = useState<string>("ALL");
+  const [filterImmediateOnly, setFilterImmediateOnly] = useState<boolean>(false);
+
+  // 簡易チャット用のステート
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState<string>("");
+
   const [deletedIds, setDeletedIds] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("fight_club_deleted_ids");
@@ -89,22 +101,35 @@ function App() {
     }
   });
 
-  // メインフォーム（一言コメント用として comment フィールドを追加）
-  const [userForm, setUserForm] = useState<UserPayload & { customLocation: string; comment: string }>({
-    role: "student",
+  // メインフォーム（区分を排除、snsContact項目とcomment項目を追加）
+  const [userForm, setUserForm] = useState({
     nickname: "",
-    games: [],
-    availability: [],
+    games: [] as string[],
+    availability: [] as AvailabilitySlot[],
     customLocation: "",
     comment: "",
+    snsContact: "", 
   });
 
-  // トースト通知をトリガーする関数
+  // ニックネーム・場所のプリセット自動保存
+  useEffect(() => {
+    const savedNickname = localStorage.getItem("fight_club_preset_nickname") || "";
+    const savedLocation = localStorage.getItem("fight_club_preset_location") || "";
+    setUserForm(prev => ({
+      ...prev,
+      nickname: savedNickname,
+      customLocation: savedLocation
+    }));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("fight_club_preset_nickname", userForm.nickname);
+    localStorage.setItem("fight_club_preset_location", userForm.customLocation);
+  }, [userForm.nickname, userForm.customLocation]);
+
   const addToast = (message: string, type: "success" | "error" | "info" = "success") => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, type }]);
-    
-    // 3秒後に自動消去
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3000);
@@ -131,6 +156,58 @@ function App() {
     refreshAll();
   }, []);
 
+  // 1. 区分に関わらない「同じゲーム」「同じ空き時間」のフラットレコメンドアルゴリズム
+  const handleSearchSuggestions = () => {
+    setLoading(true);
+    setStatusMessage("マッチング候補を全般探索中...");
+
+    const activeUsers = users.filter(u => !deletedIds.includes(u.id));
+    const pairs: any[] = [];
+
+    // 総当たりで条件が重なるペア（ユーザー同士）を抽出
+    for (let i = 0; i < activeUsers.length; i++) {
+      for (let j = i + 1; j < activeUsers.length; j++) {
+        const u1 = activeUsers[i];
+        const u2 = activeUsers[j];
+
+        // 共通のゲームを抽出
+        const sharedGames = u1.games?.filter((g: string) => u2.games?.includes(g)) || [];
+        if (sharedGames.length === 0) continue;
+
+        // 共通の空き時間を抽出
+        const sharedSlots = u1.availability?.filter((slot1: any) => 
+          u2.availability?.some((slot2: any) => 
+            slot1.day === slot2.day && slot1.start === slot2.start
+          )
+        ) || [];
+
+        if (sharedSlots.length === 0) continue;
+
+        // ペア候補としてスタック
+        sharedSlots.forEach((slot: any) => {
+          pairs.push({
+            id: `${u1.id}-${u2.id}-${slot.day}-${slot.start}`,
+            userA: u1,
+            userB: u2,
+            slot: slot,
+            sharedGames: sharedGames
+          });
+        });
+      }
+    }
+
+    setCustomSuggestions(pairs);
+
+    if (pairs.length === 0) {
+      setStatusMessage("条件が完全一致する自動候補はありませんでした。");
+      addToast("一致する自動候補はありませんでした", "info");
+    } else {
+      setStatusMessage(`共通の条件を持つ候補が ${pairs.length} 件検出されました。`);
+      addToast(`${pairs.length}件のレコメンドを検出しました`, "success");
+    }
+    setLoading(false);
+  };
+
   const handleAddStandardTime = () => {
     const targetSlot = TIME_SLOT_OPTIONS[selectedSlotIndex];
     if (!targetSlot) return;
@@ -150,10 +227,8 @@ function App() {
         ...userForm,
         availability: [...userForm.availability, newSlot]
       });
-      setStatusMessage(`スケジュールを追加しました。`);
       addToast("空き時間をリストに追加しました", "info");
     } else {
-      setStatusMessage("その枠は既に登録されています。");
       addToast("その枠は既に登録されています", "error");
     }
     setActiveModal("none");
@@ -161,10 +236,7 @@ function App() {
 
   const handleAddCustomTime = () => {
     const text = customTimeText.trim();
-    if (!text) {
-      alert("時間帯のテキストを入力してください。");
-      return;
-    }
+    if (!text) return;
 
     const newSlot: AvailabilitySlot = {
       day: customDay,
@@ -172,9 +244,7 @@ function App() {
       end: "CUSTOM"
     };
 
-    const exists = userForm.availability.some(
-      s => s.day === newSlot.day && s.start === newSlot.start
-    );
+    const exists = userForm.availability.some(s => s.day === newSlot.day && s.start === newSlot.start);
 
     if (!exists) {
       setUserForm({
@@ -182,10 +252,8 @@ function App() {
         availability: [...userForm.availability, newSlot]
       });
       setCustomTimeText("");
-      setStatusMessage(`カスタム時間「${text}」を追加しました。`);
       addToast("カスタム時間を追加しました", "info");
     } else {
-      setStatusMessage("そのカスタム時間は既に存在します。");
       addToast("そのカスタム時間は既に存在します", "error");
     }
     setActiveModal("none");
@@ -219,8 +287,6 @@ function App() {
     if (!confirm("このエントリー募集を取り消しますか？")) return;
     
     setLoading(true);
-    setStatusMessage("エントリー情報を削除しています...");
-
     const nextDeletedIds = [...deletedIds, id];
     setDeletedIds(nextDeletedIds);
     localStorage.setItem("fight_club_deleted_ids", JSON.stringify(nextDeletedIds));
@@ -230,34 +296,21 @@ function App() {
         await api.deleteRoom(id);
       }
     } catch (err) {
-      console.warn("サーバー側のAPIは未対応です。フロントエンド側で永久非表示にしました。");
+      console.warn("ローカルプロキシ削除完了");
     }
 
-    setStatusMessage("エントリー情報を削除しました。");
     addToast("募集エントリーを取り消しました", "success");
     setLoading(false);
   };
 
   const onUserSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!userForm.nickname.trim()) {
-      setStatusMessage("ニックネームを入力してください。");
-      addToast("ニックネームを入力してください", "error");
+    if (!userForm.nickname.trim() || !userForm.customLocation.trim()) {
+      addToast("必須項目を入力してください", "error");
       return;
     }
-    if (!userForm.customLocation.trim()) {
-      setStatusMessage("対戦希望場所を入力してください。");
-      addToast("対戦希望場所を入力してください", "error");
-      return;
-    }
-    if (userForm.availability.length === 0) {
-      setStatusMessage("空き時間を最低1つ以上選択・登録してください。");
-      addToast("空き時間を登録してください", "error");
-      return;
-    }
-    if (userForm.games.length === 0) {
-      setStatusMessage("タイトルを1つ以上選択してください。");
-      addToast("タイトルを選択してください", "error");
+    if (userForm.availability.length === 0 || userForm.games.length === 0) {
+      addToast("時間帯とタイトルを登録してください", "error");
       return;
     }
 
@@ -270,138 +323,133 @@ function App() {
         availableSlots: userForm.availability
       });
 
-      // ニックネーム、場所、そして一言コメント（ある場合）をパース可能な形で一つの文字列に結合して送信
-      const commentString = userForm.comment.trim() ? ` //💬:${userForm.comment.trim()}` : "";
+      // 隠しメタデータ（一言、SNS連絡先）をパース用トークンでカプセル化して送信
+      const commentStr = userForm.comment.trim() ? ` [COMM:${userForm.comment.trim()}]` : "";
+      const snsStr = userForm.snsContact.trim() ? ` [SNS:${userForm.snsContact.trim()}]` : "";
+      
       await api.registerUser({
-        role: userForm.role,
-        nickname: `${userForm.nickname} (@${userForm.customLocation})${commentString}`,
+        role: "student", // 内部型補完用（実質撤廃）
+        nickname: `${userForm.nickname} (@${userForm.customLocation})${commentStr}${snsStr}`,
         games: userForm.games,
         availability: userForm.availability
       });
 
-      setStatusMessage(`「${userForm.nickname}」の募集を掲示板に公開しました。`);
-      addToast("新規募集の投稿が完了しました！", "success");
-      
-      setUserForm({ role: "student", nickname: "", games: [], availability: [], customLocation: "", comment: "" });
+      addToast("新規募集の投稿が完了しました", "success");
+      setUserForm({ 
+        nickname: userForm.nickname, 
+        customLocation: userForm.customLocation, 
+        games: [], 
+        availability: [], 
+        comment: "",
+        snsContact: ""
+      });
       await refreshAll();
     } catch (err: any) {
-      setStatusMessage(`募集公開エラー: ${err.message}`);
       addToast("投稿に失敗しました", "error");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleJoinLobbyUser = async (hostUser: any, chosenGame: string, slot: AvailabilitySlot) => {
-    setLoading(true);
-    try {
-      await api.confirmMatch({
-        studentId: hostUser.id,
-        professorId: "direct-join-user",
-        roomId: "custom-room",
-        matchedGame: chosenGame,
-        slot: slot,
-      });
-      setActiveEvent({
-        room: { building: "指定場所", name: hostUser.nickname.split("@")[1]?.split(" //")[0] || "学内教室" },
-        slot: slot,
-        matchedGame: chosenGame,
-      });
-      setMatchedPeople([hostUser.nickname.split(" ")[0], "あなた"]);
-      setView("event");
-      setStatusMessage("マッチングが成立しました！");
-      addToast("マッチングが成立しました！対戦画面へ移行します", "success");
-    } catch (err: any) {
-      setStatusMessage(`参加エラー: ${err.message}`);
-      addToast("マッチング成立に失敗しました", "error");
-    } finally {
-      setLoading(false);
+  const handleJoinLobbyUser = (hostUser: any, chosenGame: string, slot: AvailabilitySlot) => {
+    // 相手のニックネームからSNS情報を抽出
+    const rawNickname = hostUser.nickname || "";
+    let extractedSns = "未登録";
+    if (rawNickname.includes("[SNS:")) {
+      extractedSns = rawNickname.split("[SNS:")[1].split("]")[0];
     }
+
+    setActiveEvent({
+      room: { name: hostUser.nickname.split("@")[1]?.split(" [")[0] || "学内指定場所" },
+      slot: slot,
+      matchedGame: chosenGame,
+      hostSns: extractedSns,
+      mySns: "（あなたが開示中）"
+    });
+
+    // 簡易チャットを初期化
+    setChatMessages([
+      { id: 1, sender: "SYSTEM", text: "マッチングが成立しました。合流に向けて伝言板を活用してください。", time: "SYSTEM" }
+    ]);
+
+    setMatchedPeople([hostUser.nickname.split(" ")[0], "あなた"]);
+    setView("event");
+    addToast("マッチングが成立しました", "success");
   };
 
-  const handleSearchSuggestions = async () => {
-    setLoading(true);
-    setStatusMessage("マッチング候補を自動探索中...");
-    try {
-      const res = await api.getSuggestions();
-      setSuggestions(res || []);
-      if (!res || res.length === 0) {
-        setStatusMessage("条件が完全一致する自動候補はありませんでした。");
-        addToast("完全一致する自動候補はありませんでした", "info");
-      } else {
-        addToast(`${res.length}件のマッチング候補を検出しました`, "success");
-      }
-    } catch (err: any) {
-      setStatusMessage(`探索エラー: ${err.message}`);
-      addToast("自動探索中にエラーが発生しました", "error");
-    } finally {
-      setLoading(false);
-    }
+  // 簡易チャット送信処理
+  const handleSendChatMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+    const newMsg: ChatMessage = {
+      id: Date.now(),
+      sender: "あなた",
+      text: chatInput.trim(),
+      time: timeStr
+    };
+
+    setChatMessages(prev => [...prev, newMsg]);
+    setChatInput("");
+    addToast("メッセージを送信しました", "success");
   };
 
-  const handleDirectConfirm = async (sug: MatchSuggestion, game: string) => {
-    setLoading(true);
-    try {
-      await api.confirmMatch({
-        studentId: sug.student.id,
-        professorId: sug.professor.id,
-        roomId: sug.room.id,
-        matchedGame: game,
-        slot: sug.slot,
+  // 2. 「今から・次の休みに遊べる」判定を含んだ動的フィルタリング
+  const filteredAndVisibleUsers = useMemo(() => {
+    // 現在の曜日と時間を取得（曜日はAPI仕様のMon-Friにマップ）
+    const now = new Date();
+    const daysMap = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const currentDayValue = daysMap[now.getDay()]; 
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    return users
+      .filter((u) => !deletedIds.includes(u.id))
+      .filter((u) => {
+        // ① タイトル検索
+        if (filterGameSearch.trim() !== "") {
+          const searchLower = filterGameSearch.toLowerCase().trim();
+          if (!u.games?.some((g: string) => g.toLowerCase().includes(searchLower))) return false;
+        }
+        // ② 曜日フィルタ
+        if (filterDay !== "ALL" && !filterImmediateOnly) {
+          if (!u.availability?.some((av: any) => av.day === filterDay)) return false;
+        }
+        // ③ 「今すぐ遊べる」クイック判定マクロ
+        if (filterImmediateOnly) {
+          return u.availability?.some((av: any) => {
+            if (av.day !== currentDayValue) return false;
+            if (av.end === "CUSTOM") return true; // カスタムは許容
+
+            // 各時限の開始・終了時刻をパースして、現在時刻が「該当枠の前後15分以内」か「時間内」かを判定
+            const [sh, sm] = av.start.split(":").map(Number);
+            const [eh, em] = av.end.split(":").map(Number);
+            const startTotal = sh * 60 + sm;
+            const endTotal = eh * 60 + em;
+
+            // 次の休み時間・今すぐ遊べる枠（開始30分前から終了までの猶予）
+            return (currentMinutes >= startTotal - 30 && currentMinutes <= endTotal);
+          });
+        }
+        return true;
       });
-      setStatusMessage("マッチングが成立しました。");
-      addToast("アルゴリズムマッチングが確定しました！", "success");
-      setSuggestions([]);
-      await refreshAll();
-    } catch (err: any) {
-      setStatusMessage(`確定エラー: ${err.message}`);
-      addToast("確定処理に失敗しました", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const visibleUsers = useMemo(() => {
-    return users.filter((u) => !deletedIds.includes(u.id));
-  }, [users, deletedIds]);
+  }, [users, deletedIds, filterGameSearch, filterDay, filterImmediateOnly]);
 
   if (view === "event") {
     return (
       <div className="app">
-        {/* トースト通知コンポーネント（固定配置） */}
-        <div style={{
-          position: "fixed",
-          top: "20px",
-          right: "20px",
-          zIndex: 9999,
-          display: "flex",
-          flexDirection: "column",
-          gap: "10px"
-        }}>
-          {toasts.map((t) => (
-            <div key={t.id} style={{
-              background: t.type === "success" ? "#00ff66" : t.type === "error" ? "#ff0055" : "#00ccff",
-              color: "#000",
-              padding: "12px 24px",
-              borderRadius: "4px",
-              fontWeight: "bold",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
-              minWidth: "240px",
-              animation: "fadeIn 0.3s ease-out"
-            }}>
-              {t.message}
-            </div>
-          ))}
-        </div>
-
         <header>
           <h1>FIGHT CLUB</h1>
           <p className="subtitle">MATCH SETTLED</p>
         </header>
+
         <section style={{ borderColor: "#ff007f" }}>
           <div style={{ textAlign: "center", marginBottom: "32px" }}>
-            <h2 style={{ color: "#ff007f", border: "none", padding: 0, fontSize: "2.5rem" }}>MATCH CONFIRMED</h2>
+            <h2 style={{ color: "#ff007f", border: "none", padding: 0, fontSize: "2rem" }}>MATCH CONFIRMED</h2>
           </div>
+
           <div className="event-grid">
             <div className="event-card">
               <h3>LOCATION</h3>
@@ -415,15 +463,51 @@ function App() {
             </div>
           </div>
         
-          <div className="event-card" style={{ marginTop: "16px" }}>
-            <h3>SELECTED TITLE</h3>
-            <p className="highlight" style={{ color: "#ff007f" }}>{activeEvent?.matchedGame || "GAME"}</p>
+          <div className="event-grid" style={{ marginTop: "16px" }}>
+            <div className="event-card">
+              <h3>SELECTED TITLE</h3>
+              <p className="highlight" style={{ color: "#ff007f" }}>{activeEvent?.matchedGame || "GAME"}</p>
+            </div>
+            {/* 3. マッチ成立画面にのみ開示される連絡先アカウント */}
+            <div className="event-card" style={{ border: "1px dashed #ff007f" }}>
+              <h3>HOST CONTACT ID (SNS)</h3>
+              <p className="highlight" style={{ color: "#00ffff", fontSize: "1.2rem" }}>{activeEvent?.hostSns}</p>
+            </div>
           </div>
+
           <div className="event-card" style={{ marginTop: "16px" }}>
             <h3>PLAYERS</h3>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "8px" }}>
               {matchedPeople.map((p) => <span key={p} className="badge">{p}</span>)}
             </div>
+          </div>
+
+          {/* 3. マッチング画面内・簡易チャット伝言板機能 */}
+          <div style={{ marginTop: "24px", background: "#050505", border: "1px solid #222", padding: "16px" }}>
+            <h3 style={{ fontSize: "14px", color: "#fff", letterSpacing: "1px", marginBottom: "12px", borderBottom: "1px solid #222", paddingBottom: "6px" }}>
+              LOBBY CHAT BOARD (簡易伝言板)
+            </h3>
+            <div style={{ height: "180px", overflowY: "auto", background: "#000", border: "1px solid #111", padding: "10px", marginBottom: "12px" }}>
+              {chatMessages.map(msg => (
+                <div key={msg.id} style={{ marginBottom: "8px", fontSize: "13px", lineHeigh: "1.4" }}>
+                  <span style={{ color: msg.sender === "あなた" ? "#ff007f" : msg.sender === "SYSTEM" ? "#888" : "#00ffff", fontWeight: "bold", marginRight: "8px" }}>
+                    [{msg.sender}]
+                  </span>
+                  <span style={{ color: "#ccc" }}>{msg.text}</span>
+                  <span style={{ float: "right", color: "#444", fontSize: "11px" }}>{msg.time}</span>
+                </div>
+              ))}
+            </div>
+            <form onSubmit={handleSendChatMessage} style={{ display: "flex", gap: "8px" }}>
+              <input 
+                type="text" 
+                placeholder="集合場所への到着連絡、目印などを送信..." 
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                style={{ flex: 1, background: "#000", border: "1px solid #333", color: "#fff", padding: "8px" }}
+              />
+              <button type="submit" style={{ width: "auto", padding: "0 24px", fontSize: "13px" }}>送信</button>
+            </form>
           </div>
  
           <div style={{ textAlign: "center", marginTop: "32px" }}>
@@ -436,16 +520,8 @@ function App() {
 
   return (
     <div className="app">
-      {/* トースト通知コンポーネント（固定配置、CSSアニメーション用のfadeInをインライン風に設定） */}
-      <div style={{
-        position: "fixed",
-        top: "20px",
-        right: "20px",
-        zIndex: 9999,
-        display: "flex",
-        flexDirection: "column",
-        gap: "10px"
-      }}>
+      {/* トースト通知領域 */}
+      <div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, display: "flex", flexDirection: "column", gap: "10px" }}>
         {toasts.map((t) => (
           <div key={t.id} style={{
             background: t.type === "success" ? "#ff007f" : t.type === "error" ? "#ff3333" : "#ffffff",
@@ -457,11 +533,8 @@ function App() {
             fontSize: "14px",
             letterSpacing: "1px",
             boxShadow: "0 10px 30px rgba(0,0,0,0.7)",
-            minWidth: "260px",
-            boxSizing: "border-box",
-            transition: "all 0.3s ease"
+            minWidth: "260px"
           }}>
-            <span style={{ marginRight: "8px" }}>{t.type === "success" ? "✓" : t.type === "error" ? "✗" : "ℹ"}</span>
             {t.message}
           </div>
         ))}
@@ -475,53 +548,59 @@ function App() {
       {statusMessage && <div className="status-banner">{statusMessage}</div>}
 
       <section>
-        <h2>対戦・マッチの新規募集をかける</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+          <h2>対戦・マッチの新規募集をかける</h2>
+        </div>
         <form onSubmit={onUserSubmit}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginBottom: "16px" }}>
-            <label style={{ margin: 0 }}>
-              区分
-              <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as "student" | "professor" })}>
-                <option value="student">生徒 (STUDENT)</option>
-                <option value="professor">教授 (PROFESSOR)</option>
-              </select>
-            </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
             <label style={{ margin: 0 }}>
               ニックネーム
-              <input type="text" placeholder="匿名" value={userForm.nickname} onChange={(e) => setUserForm({ ...userForm, nickname: e.target.value })} required />
+              <input type="text" placeholder="匿名ユーザー" value={userForm.nickname} onChange={(e) => setUserForm({ ...userForm, nickname: e.target.value })} required />
             </label>
             <label style={{ margin: 0 }}>
               開催場所の指定
-              <input type="text" placeholder="例: 7A201教室, ラウンジ" value={userForm.customLocation} onChange={(e) => setUserForm({ ...userForm, customLocation: e.target.value })} required />
+              <input type="text" placeholder="例: 7A201教室、ラウンジ奥" value={userForm.customLocation} onChange={(e) => setUserForm({ ...userForm, customLocation: e.target.value })} required />
             </label>
           </div>
 
-          {/* 新規追加：一言コメントのテキストボックス */}
-          <div style={{ marginBottom: "24px" }}>
-            <label style={{ marginBottom: "6px" }}>一言コメント（掲示板に掲載されます / 任意）</label>
-            <input 
-              type="text" 
-              placeholder="例: 初心者歓迎です！気軽にどうぞ！、ジョイコン持参します" 
-              value={userForm.comment} 
-              onChange={(e) => setUserForm({ ...userForm, comment: e.target.value })} 
-              maxLength={60}
-            />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "24px" }}>
+            <div>
+              <label style={{ marginBottom: "6px" }}>一言コメント（任意）</label>
+              <input 
+                type="text" 
+                placeholder="例: 初心者歓迎、プロコン持参します" 
+                value={userForm.comment} 
+                onChange={(e) => setUserForm({ ...userForm, comment: e.target.value })} 
+                maxLength={60}
+              />
+            </div>
+            {/* 3. 連絡用SNS入力フィールドの追加 */}
+            <div>
+              <label style={{ marginBottom: "6px" }}>連絡用SNSアカウント (任意 / マッチ成立時のみ相手に開示)</label>
+              <input 
+                type="text" 
+                placeholder="例: Discord ID、Xユーザー名など" 
+                value={userForm.snsContact} 
+                onChange={(e) => setUserForm({ ...userForm, snsContact: e.target.value })} 
+              />
+            </div>
           </div>
 
           <div style={{ marginBottom: "24px" }}>
             <label style={{ marginBottom: "8px" }}>空き時間の選択（登録必須）</label>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <button type="button" className="btn-select-trigger" onClick={() => setActiveModal("standard")}>
-                【空き時間選択】 曜日・時限リストから選ぶ
+                曜日・時限リストから選ぶ
               </button>
               <button type="button" className="btn-select-trigger custom-btn" onClick={() => setActiveModal("custom")}>
-                【カスタム】 例外的な時間を自由入力する
+                例外的な時間を自由入力する
               </button>
             </div>
 
             <div style={{ marginTop: "12px", background: "#0a0a0a", border: "1px solid #222", padding: "14px" }}>
               <span className="tag-category-title" style={{ color: "#ff007f" }}>現在設定中の空き時間リスト (クリックで取り消し):</span>
               {userForm.availability.length === 0 ? (
-                <div style={{ fontSize: "12px", color: "#555", marginTop: "4px" }}>時間を設定してください。上のボタンから追加できます。</div>
+                <div style={{ fontSize: "12px", color: "#555", marginTop: "4px" }}>時間を設定してください。</div>
               ) : (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
                   {userForm.availability.map((av, index) => {
@@ -533,7 +612,7 @@ function App() {
                         type="button"
                         className="selected-time-badge"
                         onClick={() => handleRemoveSelectedSlot(index)}
-                        title="クリックして削除"
+                        title="取り消す"
                       >
                         {dayLabel} : {timeLabel} <span style={{ color: "#ff007f", marginLeft: "4px" }}>×</span>
                       </button>
@@ -581,15 +660,12 @@ function App() {
               <button className="btn-close-modal" onClick={() => setActiveModal("none")}>×</button>
             </div>
             <div className="modal-body">
-              <p className="tab-desc">曜日と時限を選択し、追加ボタンを押して確定してください。</p>
-              
               <div style={{ marginBottom: "16px" }}>
                 <label>曜日</label>
                 <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
                   {DAYS_OF_WEEK.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
                 </select>
               </div>
-
               <div style={{ marginBottom: "24px" }}>
                 <label>時限・時間帯</label>
                 <select value={selectedSlotIndex} onChange={(e) => setSelectedSlotIndex(Number(e.target.value))}>
@@ -598,7 +674,6 @@ function App() {
                   ))}
                 </select>
               </div>
-
               <div style={{ display: "flex", gap: "12px" }}>
                 <button type="button" onClick={handleAddStandardTime} style={{ flex: 1 }}>この時間帯を追加</button>
                 <button type="button" className="btn-secondary" onClick={() => setActiveModal("none")} style={{ flex: 1 }}>キャンセル</button>
@@ -616,26 +691,16 @@ function App() {
               <button className="btn-close-modal" onClick={() => setActiveModal("none")}>×</button>
             </div>
             <div className="modal-body">
-              <p className="tab-desc">標準時間割に当てはまらない、特殊な時間を自由に入力して追加できます。</p>
-
               <div style={{ marginBottom: "16px" }}>
                 <label>曜日</label>
                 <select value={customDay} onChange={(e) => setCustomDay(e.target.value)}>
                   {DAYS_OF_WEEK.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
                 </select>
               </div>
-
               <div style={{ marginBottom: "24px" }}>
                 <label>時間帯の直接指定</label>
-                <input 
-                  type="text" 
-                  placeholder="例: 12:00-12:50 (昼休み), 19:00以降" 
-                  value={customTimeText} 
-                  onChange={(e) => setCustomTimeText(e.target.value)}
-                  required
-                />
+                <input type="text" placeholder="例: 12:00-12:50" value={customTimeText} onChange={(e) => setCustomTimeText(e.target.value)} required />
               </div>
-
               <div style={{ display: "flex", gap: "12px" }}>
                 <button type="button" onClick={handleAddCustomTime} style={{ flex: 1 }}>カスタム時間を追加</button>
                 <button type="button" className="btn-secondary" onClick={() => setActiveModal("none")} style={{ flex: 1 }}>キャンセル</button>
@@ -647,28 +712,111 @@ function App() {
 
       {/* 公開募集掲示板（ロビー一覧） */}
       <section style={{ border: "2px solid #ff007f" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
           <div>
             <h2 style={{ margin: 0, border: "none", padding: 0 }}>LOBBY BOARD（公開募集一覧）</h2>
           </div>
-          <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px" }} onClick={handleSearchSuggestions}>マッチング自動検出</button>
+          {/* 1. 区分に縛られない全般条件マッチのトリガー */}
+          <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px" }} onClick={handleSearchSuggestions}>
+            全般マッチング自動検出
+          </button>
         </div>
 
-        {visibleUsers.length === 0 ? (
-          <div className="empty-state">現在募集中のロビーはありません。最初の募集を投稿しよう。</div>
+        {/* インタラクティブ検索・フィルタコントロールパネル */}
+        <div style={{ background: "#0d0d0d", border: "1px solid #222", padding: "16px", marginBottom: "20px", display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ flex: 2, minWidth: "180px" }}>
+            <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>ゲームタイトルで絞り込み</span>
+            <input 
+              type="text" 
+              placeholder="タイトルを入力 (空欄で全表示)" 
+              value={filterGameSearch} 
+              onChange={(e) => setFilterGameSearch(e.target.value)} 
+              style={{ margin: 0, padding: "8px 12px", fontSize: "13px" }}
+            />
+          </div>
+
+          <div style={{ flex: 3, minWidth: "260px" }}>
+            <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>
+              {filterImmediateOnly ? "今すぐマッチ・マクロが有効です" : "希望曜日でしぼり込み"}
+            </span>
+            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+              <button 
+                type="button" 
+                onClick={() => { setFilterDay("ALL"); setFilterImmediateOnly(false); }}
+                className={`tag-chip ${(!filterImmediateOnly && filterDay === "ALL") ? "active" : ""}`}
+                style={{ padding: "6px 10px", fontSize: "12px" }}
+              >
+                全て表示
+              </button>
+              {DAYS_OF_WEEK.map((d) => (
+                <button 
+                  key={d.value}
+                  type="button" 
+                  disabled={filterImmediateOnly}
+                  onClick={() => setFilterDay(d.value)}
+                  className={`tag-chip ${(!filterImmediateOnly && filterDay === d.value) ? "active" : ""}`}
+                  style={{ padding: "6px 10px", fontSize: "12px", opacity: filterImmediateOnly ? 0.3 : 1 }}
+                >
+                  {d.label.slice(0, 2)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. 今から・次の休み時間に遊べるロビーのクイックボタン */}
+          <div style={{ flex: 1, minWidth: "160px" }}>
+            <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>タイム枠ブースト</span>
+            <button
+              type="button"
+              onClick={() => {
+                setFilterImmediateOnly(!filterImmediateOnly);
+                setFilterDay("ALL");
+              }}
+              className={`btn-select-trigger ${filterImmediateOnly ? "active" : ""}`}
+              style={{
+                margin: 0,
+                padding: "8px 12px",
+                fontSize: "12px",
+                background: filterImmediateOnly ? "#ff007f" : "#000",
+                color: "#fff",
+                border: filterImmediateOnly ? "1px solid #ff007f" : "1px solid #333",
+                textAlign: "center"
+              }}
+            >
+              {filterImmediateOnly ? "ON: 今すぐ遊べる枠" : "OFF: 今すぐ遊べる枠"}
+            </button>
+          </div>
+          
+          {(filterGameSearch || filterDay !== "ALL" || filterImmediateOnly) && (
+            <div style={{ alignSelf: "flex-end" }}>
+              <button 
+                type="button" 
+                className="btn-delete-small" 
+                style={{ height: "34px", padding: "0 12px", background: "#222", border: "1px solid #333", color: "#fff" }}
+                onClick={() => { setFilterGameSearch(""); setFilterDay("ALL"); setFilterImmediateOnly(false); }}
+              >
+                クリア ✕
+              </button>
+            </div>
+          )}
+        </div>
+
+        {filteredAndVisibleUsers.length === 0 ? (
+          <div className="empty-state" style={{ padding: "40px 20px" }}>
+            条件に一致するアクティブな募集ロビーはありません。
+          </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "16px" }}>
-            {visibleUsers.map((u) => {
-              // 文字列から「場所」と「一言コメント」を綺麗に分離抽出するパース処理
+            {filteredAndVisibleUsers.map((u) => {
               const rawNickname = u.nickname || "";
               const locationPart = rawNickname.split("@")[1] || "学内";
-              const displayLocation = locationPart.split(" //")[0];
+              const displayLocation = locationPart.split(" [")[0];
               const cleanName = rawNickname.split(" ")[0];
               
-              // コメント部分を抽出
+              // 一言コメントのパース
               let displayComment = "";
-              if (rawNickname.includes("//💬:")) {
-                displayComment = rawNickname.split("//💬:")[1];
+              if (rawNickname.includes("[COMM:")) {
+                displayComment = rawNickname.split("[COMM:")[1].split("]")[0];
               }
         
               return (
@@ -676,17 +824,15 @@ function App() {
                   <div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
-                        <span className="pink-tag" style={{ marginRight: "6px" }}>{u.role ? u.role.toUpperCase() : "STUDENT"}</span>
                         <span className="white-tag">{displayLocation}</span>
                       </div>
                       <button className="btn-delete-small" onClick={() => handleDeleteUser(u.id)}>削除</button>
                     </div>
 
                     <div style={{ margin: "14px 0 4px 0", fontSize: "16px", fontWeight: "bold" }}>
-                      ホスト: {cleanName}
+                      HOST: {cleanName}
                     </div>
 
-                    {/* 一言コメントが投稿されている場合のみカード内に綺麗に表示する */}
                     {displayComment && (
                       <div style={{
                         background: "#111",
@@ -698,12 +844,12 @@ function App() {
                         fontStyle: "italic",
                         wordBreak: "break-all"
                       }}>
-                        💬 {displayComment}
+                        {displayComment}
                       </div>
                     )}
 
                     <div style={{ fontSize: "12px", color: "#888", marginBottom: "12px", marginTop: "10px" }}>
-                      <div>希望空き時間一覧:</div>
+                      <div>希望スケジュール:</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
                         {u.availability?.map((av: any, i: number) => {
                           const showTxt = av.end === "CUSTOM" ? av.start : `${av.start}-${av.end}`;
@@ -718,7 +864,7 @@ function App() {
                   </div>
 
                   <div className="action-zone" style={{ marginTop: "auto" }}>
-                    <div className="action-title">参戦するゲームタイトルを選択:</div>
+                    <div className="action-title">タイトルを選択して参戦:</div>
                     <div className="direct-btn-group">
                       {u.games?.map((game: string) => (
                         <button
@@ -726,7 +872,7 @@ function App() {
                           className="btn-direct-confirm"
                           onClick={() => handleJoinLobbyUser(u, game, u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
                         >
-                          {game} で対戦に参加
+                          {game}
                         </button>
                       ))}
                     </div>
@@ -737,25 +883,30 @@ function App() {
           </div>
         )}
 
-        {suggestions.length > 0 && (
+        {/* 1. 刷新されたフラット・レコメンドセクション */}
+        {customSuggestions.length > 0 && (
           <div style={{ marginTop: "32px", borderTop: "2px dashed #ff007f", paddingTop: "24px" }}>
-            <h3>アルゴリズム自動マッチング提案</h3>
+            <h3 style={{ fontSize: "16px", color: "#ff007f", letterSpacing: "1px" }}>MATCHING RECOMMENDATION（共通条件ユーザー）</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "16px", marginTop: "12px" }}>
-              {suggestions.map((sug, index) => (
-                <div key={index} className="suggestion-card">
+              {customSuggestions.map((sug) => (
+                <div key={sug.id} className="suggestion-card" style={{ borderColor: "#00ffff" }}>
                   <div className="card-header-info">
-                    <span className="pink-tag">{DAYS_OF_WEEK.find(d => d.value === sug.slot.day)?.label || sug.slot.day}</span>
-                    <span className="white-tag">{sug.room?.name}</span>
+                    <span className="pink-tag">{DAYS_OF_WEEK.find(d => d.value === sug.slot.day)?.label || sug.slot.day} {sug.slot.start}</span>
                   </div>
-                  <div className="pair-info">
-                    <div><span className="label">STUDENT:</span> {sug.student?.nickname?.split(" ")[0]}</div>
-                    <div><span className="label">PROFESSOR:</span> {sug.professor?.nickname?.split(" ")[0]}</div>
+                  <div className="pair-info" style={{ margin: "10px 0", fontSize: "14px" }}>
+                    <div><span style={{ color: "#ff007f" }}>USER A:</span> {sug.userA?.nickname?.split(" ")[0]}</div>
+                    <div><span style={{ color: "#00ffff" }}>USER B:</span> {sug.userB?.nickname?.split(" ")[0]}</div>
                   </div>
                   <div className="action-zone">
+                    <div className="action-title">共通のタイトル:</div>
                     <div className="direct-btn-group">
-                      {sug.sharedGames?.map(game => (
-                        <button key={game} className="btn-direct-confirm" onClick={() => handleDirectConfirm(sug, game)}>
-                          {game} で自動マッチ確定
+                      {sug.sharedGames?.map((game: string) => (
+                        <button 
+                          key={game} 
+                          className="btn-direct-confirm" 
+                          onClick={() => handleJoinLobbyUser(sug.userA, game, sug.slot)}
+                        >
+                          {game} でマッチを仲介
                         </button>
                       ))}
                     </div>
@@ -785,7 +936,7 @@ function App() {
                   <thead>
                     <tr>
                       <th>ホスト</th>
-                      <th>参戦プレイヤー</th>
+                      <th>プレイヤー</th>
                       <th>場所</th>
                       <th>対戦種目</th>
                     </tr>
