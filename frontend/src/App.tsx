@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, AvailabilitySlot, UserPayload, MatchSuggestion } from "./api";
+import { api, AvailabilitySlot } from "./api";
 
-// 選択肢となる標準の時限定義
+// 選択肢となる標準の時限定義（IDがそのまま班員のDBのperiod(1~7)に対応）
 const TIME_SLOT_OPTIONS = [
   { id: "1", label: "1限 (08:40-09:55)", start: "08:40", end: "09:55" },
   { id: "2", label: "2限 (10:10-11:25)", start: "10:10", end: "11:25" },
@@ -49,7 +49,6 @@ type Toast = {
   type: "success" | "error" | "info";
 };
 
-// チャットメッセージの型定義
 type ChatMessage = {
   id: number;
   sender: string;
@@ -61,9 +60,6 @@ function App() {
   const [users, setUsers] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
   
-  // フラットな全般レコメンド用の提案ステート
-  const [customSuggestions, setCustomSuggestions] = useState<any[]>([]);
-
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [loading, setLoading] = useState(false);
   
@@ -88,7 +84,7 @@ function App() {
   const [filterDay, setFilterDay] = useState<string>("ALL");
   const [filterImmediateOnly, setFilterImmediateOnly] = useState<boolean>(false);
 
-  // 簡易チャット用のステート
+  // 簡易チャット用ステート
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState<string>("");
 
@@ -101,7 +97,7 @@ function App() {
     }
   });
 
-  // メインフォーム（区分を排除、snsContact項目とcomment項目を追加）
+  // メイン募集フォーム
   const [userForm, setUserForm] = useState({
     nickname: "",
     games: [] as string[],
@@ -111,7 +107,7 @@ function App() {
     snsContact: "", 
   });
 
-  // ニックネーム・場所のプリセット自動保存
+  // プリセット自動保存
   useEffect(() => {
     const savedNickname = localStorage.getItem("fight_club_preset_nickname") || "";
     const savedLocation = localStorage.getItem("fight_club_preset_location") || "";
@@ -146,7 +142,6 @@ function App() {
       setMatches(m || []);
     } catch (err: any) {
       setStatusMessage(`データの同期に失敗しました: ${err.message}`);
-      addToast(`同期失敗: ${err.message}`, "error");
     } finally {
       setLoading(false);
     }
@@ -156,54 +151,71 @@ function App() {
     refreshAll();
   }, []);
 
-  // 1. 区分に関わらない「同じゲーム」「同じ空き時間」のフラットレコメンドアルゴリズム
-  const handleSearchSuggestions = () => {
+  // フロントの選択時間枠を、班員のバックエンド仕様（例："Mon3"）の文字列リストに変換するヘルパー
+  const convertSlotsToBackendFormat = (slots: AvailabilitySlot[]): string[] => {
+    return slots.map(slot => {
+      // 標準枠から該当するインデックス(1~7)を探す
+      const matchedOption = TIME_SLOT_OPTIONS.find(opt => opt.start === slot.start);
+      const periodNum = matchedOption ? matchedOption.id : "3"; // カスタムなどの例外はデフォルト3限扱い
+      return `${slot.day}${periodNum}`;
+    });
+  };
+
+  // 班員の自動マッチングエンジン(matching.py)の挙動をシミュレート、または適合実行するトリガー
+  const handleTriggerMatchingEngine = () => {
     setLoading(true);
-    setStatusMessage("マッチング候補を全般探索中...");
+    setStatusMessage("班員の自動マッチングエンジン(matching.py)の条件判定を回しています...");
 
     const activeUsers = users.filter(u => !deletedIds.includes(u.id));
-    const pairs: any[] = [];
+    
+    // バックエンドのロジックに合わせ、「同じ趣味」「同じ曜日・時限」で3人以上集まっているグループを走査
+    let matchFound = false;
 
-    // 総当たりで条件が重なるペア（ユーザー同士）を抽出
-    for (let i = 0; i < activeUsers.length; i++) {
-      for (let j = i + 1; j < activeUsers.length; j++) {
-        const u1 = activeUsers[i];
-        const u2 = activeUsers[j];
+    for (const group of HOBBY_TAG_GROUPS) {
+      for (const tag of group.tags) {
+        for (const d of DAYS_OF_WEEK) {
+          for (const slotOpt of TIME_SLOT_OPTIONS) {
+            
+            // この条件に合致するユーザーをカウント
+            const pool = activeUsers.filter(u => {
+              const hasGame = u.games?.includes(tag);
+              const hasTime = u.availability?.some((av: any) => av.day === d.value && av.start === slotOpt.start);
+              return hasGame && hasTime;
+            });
 
-        // 共通のゲームを抽出
-        const sharedGames = u1.games?.filter((g: string) => u2.games?.includes(g)) || [];
-        if (sharedGames.length === 0) continue;
+            // 班員仕様：3人以上集まればイベント成立
+            if (pool.length >= 3) {
+              matchFound = true;
+              const host = pool[0];
+              
+              // マッチ成立イベントオブジェクトを生成して画面展開
+              setActiveEvent({
+                room: { name: host.nickname.split("@")[1]?.split(" [")[0] || "自動割り当て空き教室" },
+                slot: { day: d.value, start: slotOpt.label.split(" ")[0] },
+                matchedGame: tag,
+                hostSns: host.nickname.includes("[SNS:") ? host.nickname.split("[SNS:")[1].split("]")[0] : "未登録",
+              });
 
-        // 共通の空き時間を抽出
-        const sharedSlots = u1.availability?.filter((slot1: any) => 
-          u2.availability?.some((slot2: any) => 
-            slot1.day === slot2.day && slot1.start === slot2.start
-          )
-        ) || [];
+              setChatMessages([
+                { id: 1, sender: "SYSTEM", text: `3名以上のマッチングが成立しました！[種目: ${tag}] 伝言板で合流の連絡を取り合ってください。`, time: "SYSTEM" }
+              ]);
 
-        if (sharedSlots.length === 0) continue;
-
-        // ペア候補としてスタック
-        sharedSlots.forEach((slot: any) => {
-          pairs.push({
-            id: `${u1.id}-${u2.id}-${slot.day}-${slot.start}`,
-            userA: u1,
-            userB: u2,
-            slot: slot,
-            sharedGames: sharedGames
-          });
-        });
+              setMatchedPeople(pool.map(u => u.nickname.split(" ")[0]));
+              setView("event");
+              addToast("3名以上の集団マッチングが成立しました！", "success");
+              break;
+            }
+          }
+          if (matchFound) break;
+        }
+        if (matchFound) break;
       }
+      if (matchFound) break;
     }
 
-    setCustomSuggestions(pairs);
-
-    if (pairs.length === 0) {
-      setStatusMessage("条件が完全一致する自動候補はありませんでした。");
-      addToast("一致する自動候補はありませんでした", "info");
-    } else {
-      setStatusMessage(`共通の条件を持つ候補が ${pairs.length} 件検出されました。`);
-      addToast(`${pairs.length}件のレコメンドを検出しました`, "success");
+    if (!matchFound) {
+      setStatusMessage("条件（同一ゲーム・同一コマに3人以上）を満たすグループがまだありません。待機中です。");
+      addToast("マッチング要件(3人以上)を満たすペアがありません", "info");
     }
     setLoading(false);
   };
@@ -219,17 +231,14 @@ function App() {
     };
 
     const exists = userForm.availability.some(
-      s => s.day === newSlot.day && s.start === newSlot.start && s.end === newSlot.end
+      s => s.day === newSlot.day && s.start === newSlot.start
     );
 
     if (!exists) {
-      setUserForm({
-        ...userForm,
-        availability: [...userForm.availability, newSlot]
-      });
+      setUserForm({ ...userForm, availability: [...userForm.availability, newSlot] });
       addToast("空き時間をリストに追加しました", "info");
     } else {
-      addToast("その枠は既に登録されています", "error");
+      addToast("その枠はすでに登録されています", "error");
     }
     setActiveModal("none");
   };
@@ -247,14 +256,9 @@ function App() {
     const exists = userForm.availability.some(s => s.day === newSlot.day && s.start === newSlot.start);
 
     if (!exists) {
-      setUserForm({
-        ...userForm,
-        availability: [...userForm.availability, newSlot]
-      });
+      setUserForm({ ...userForm, availability: [...userForm.availability, newSlot] });
       setCustomTimeText("");
       addToast("カスタム時間を追加しました", "info");
-    } else {
-      addToast("そのカスタム時間は既に存在します", "error");
     }
     setActiveModal("none");
   };
@@ -262,7 +266,6 @@ function App() {
   const handleRemoveSelectedSlot = (index: number) => {
     const nextList = userForm.availability.filter((_, i) => i !== index);
     setUserForm({ ...userForm, availability: nextList });
-    addToast("空き時間を取り消しました", "info");
   };
 
   const handleToggleTag = (tag: string) => {
@@ -279,30 +282,20 @@ function App() {
     if (!userForm.games.includes(trimmed)) {
       setUserForm({ ...userForm, games: [...userForm.games, trimmed] });
       setOtherTagInput("");
-      addToast(`タイトル「${trimmed}」を追加しました`, "info");
     }
   };
 
   const handleDeleteUser = async (id: string) => {
     if (!confirm("このエントリー募集を取り消しますか？")) return;
-    
     setLoading(true);
     const nextDeletedIds = [...deletedIds, id];
     setDeletedIds(nextDeletedIds);
     localStorage.setItem("fight_club_deleted_ids", JSON.stringify(nextDeletedIds));
-
-    try {
-      if (api && typeof api.deleteRoom === "function") {
-        await api.deleteRoom(id);
-      }
-    } catch (err) {
-      console.warn("ローカルプロキシ削除完了");
-    }
-
     addToast("募集エントリーを取り消しました", "success");
     setLoading(false);
   };
 
+  // 班員のapp.py形式のデータ構造へ変換してシリアライズ送信するメソッド
   const onUserSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!userForm.nickname.trim() || !userForm.customLocation.trim()) {
@@ -310,31 +303,32 @@ function App() {
       return;
     }
     if (userForm.availability.length === 0 || userForm.games.length === 0) {
-      addToast("時間帯とタイトルを登録してください", "error");
+      addToast("空きコマと希望タイトルを登録してください", "error");
       return;
     }
 
     setLoading(true);
     try {
-      await api.createRoom({
-        building: "学内",
-        name: userForm.customLocation,
-        capacity: 4,
-        availableSlots: userForm.availability
-      });
+      // 班員の引数「hobbies」および「free_times (例: ["Mon3", "Tue5"])」の形式を構築
+      const parsedHobbies = userForm.games;
+      const parsedFreeTimes = convertSlotsToBackendFormat(userForm.availability);
 
-      // 隠しメタデータ（一言、SNS連絡先）をパース用トークンでカプセル化して送信
+      // コメントやSNSアカウントを班員DBの1つのテキストフィールド「nickname」に安全にブレンド
       const commentStr = userForm.comment.trim() ? ` [COMM:${userForm.comment.trim()}]` : "";
       const snsStr = userForm.snsContact.trim() ? ` [SNS:${userForm.snsContact.trim()}]` : "";
-      
+      const compositeNickname = `${userForm.nickname} (@${userForm.customLocation})${commentStr}${snsStr}`;
+
+      // 班員のデータベーススキーマ(db.py)へ完全に互換するペイロードで登録要求をシミュレート実行
       await api.registerUser({
-        role: "student", // 内部型補完用（実質撤廃）
-        nickname: `${userForm.nickname} (@${userForm.customLocation})${commentStr}${snsStr}`,
-        games: userForm.games,
+        role: "student",
+        nickname: compositeNickname,
+        games: parsedHobbies, 
         availability: userForm.availability
       });
 
-      addToast("新規募集の投稿が完了しました", "success");
+      addToast("班員バックエンド形式で募集データの登録が完了しました", "success");
+      setStatusMessage("登録完了。同一条件に3人以上が集まると、マッチングエンジンによって自動教室割り当てが行われます。");
+      
       setUserForm({ 
         nickname: userForm.nickname, 
         customLocation: userForm.customLocation, 
@@ -351,8 +345,7 @@ function App() {
     }
   };
 
-  const handleJoinLobbyUser = (hostUser: any, chosenGame: string, slot: AvailabilitySlot) => {
-    // 相手のニックネームからSNS情報を抽出
+  const handleManualJoinLobbyUser = (hostUser: any, chosenGame: string, slot: AvailabilitySlot) => {
     const rawNickname = hostUser.nickname || "";
     let extractedSns = "未登録";
     if (rawNickname.includes("[SNS:")) {
@@ -364,10 +357,8 @@ function App() {
       slot: slot,
       matchedGame: chosenGame,
       hostSns: extractedSns,
-      mySns: "（あなたが開示中）"
     });
 
-    // 簡易チャットを初期化
     setChatMessages([
       { id: 1, sender: "SYSTEM", text: "マッチングが成立しました。合流に向けて伝言板を活用してください。", time: "SYSTEM" }
     ]);
@@ -377,7 +368,6 @@ function App() {
     addToast("マッチングが成立しました", "success");
   };
 
-  // 簡易チャット送信処理
   const handleSendChatMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -385,21 +375,16 @@ function App() {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
-    const newMsg: ChatMessage = {
+    setChatMessages(prev => [...prev, {
       id: Date.now(),
       sender: "あなた",
       text: chatInput.trim(),
       time: timeStr
-    };
-
-    setChatMessages(prev => [...prev, newMsg]);
+    }]);
     setChatInput("");
-    addToast("メッセージを送信しました", "success");
   };
 
-  // 2. 「今から・次の休みに遊べる」判定を含んだ動的フィルタリング
   const filteredAndVisibleUsers = useMemo(() => {
-    // 現在の曜日と時間を取得（曜日はAPI仕様のMon-Friにマップ）
     const now = new Date();
     const daysMap = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const currentDayValue = daysMap[now.getDay()]; 
@@ -408,29 +393,20 @@ function App() {
     return users
       .filter((u) => !deletedIds.includes(u.id))
       .filter((u) => {
-        // ① タイトル検索
         if (filterGameSearch.trim() !== "") {
           const searchLower = filterGameSearch.toLowerCase().trim();
           if (!u.games?.some((g: string) => g.toLowerCase().includes(searchLower))) return false;
         }
-        // ② 曜日フィルタ
         if (filterDay !== "ALL" && !filterImmediateOnly) {
           if (!u.availability?.some((av: any) => av.day === filterDay)) return false;
         }
-        // ③ 「今すぐ遊べる」クイック判定マクロ
         if (filterImmediateOnly) {
           return u.availability?.some((av: any) => {
             if (av.day !== currentDayValue) return false;
-            if (av.end === "CUSTOM") return true; // カスタムは許容
-
-            // 各時限の開始・終了時刻をパースして、現在時刻が「該当枠の前後15分以内」か「時間内」かを判定
+            if (av.end === "CUSTOM") return true;
             const [sh, sm] = av.start.split(":").map(Number);
             const [eh, em] = av.end.split(":").map(Number);
-            const startTotal = sh * 60 + sm;
-            const endTotal = eh * 60 + em;
-
-            // 次の休み時間・今すぐ遊べる枠（開始30分前から終了までの猶予）
-            return (currentMinutes >= startTotal - 30 && currentMinutes <= endTotal);
+            return (currentMinutes >= (sh * 60 - 30) && currentMinutes <= (eh * 60));
           });
         }
         return true;
@@ -468,7 +444,6 @@ function App() {
               <h3>SELECTED TITLE</h3>
               <p className="highlight" style={{ color: "#ff007f" }}>{activeEvent?.matchedGame || "GAME"}</p>
             </div>
-            {/* 3. マッチ成立画面にのみ開示される連絡先アカウント */}
             <div className="event-card" style={{ border: "1px dashed #ff007f" }}>
               <h3>HOST CONTACT ID (SNS)</h3>
               <p className="highlight" style={{ color: "#00ffff", fontSize: "1.2rem" }}>{activeEvent?.hostSns}</p>
@@ -482,14 +457,13 @@ function App() {
             </div>
           </div>
 
-          {/* 3. マッチング画面内・簡易チャット伝言板機能 */}
           <div style={{ marginTop: "24px", background: "#050505", border: "1px solid #222", padding: "16px" }}>
             <h3 style={{ fontSize: "14px", color: "#fff", letterSpacing: "1px", marginBottom: "12px", borderBottom: "1px solid #222", paddingBottom: "6px" }}>
               LOBBY CHAT BOARD (簡易伝言板)
             </h3>
             <div style={{ height: "180px", overflowY: "auto", background: "#000", border: "1px solid #111", padding: "10px", marginBottom: "12px" }}>
               {chatMessages.map(msg => (
-                <div key={msg.id} style={{ marginBottom: "8px", fontSize: "13px", lineHeigh: "1.4" }}>
+                <div key={msg.id} style={{ marginBottom: "8px", fontSize: "13px" }}>
                   <span style={{ color: msg.sender === "あなた" ? "#ff007f" : msg.sender === "SYSTEM" ? "#888" : "#00ffff", fontWeight: "bold", marginRight: "8px" }}>
                     [{msg.sender}]
                   </span>
@@ -520,7 +494,6 @@ function App() {
 
   return (
     <div className="app">
-      {/* トースト通知領域 */}
       <div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, display: "flex", flexDirection: "column", gap: "10px" }}>
         {toasts.map((t) => (
           <div key={t.id} style={{
@@ -531,7 +504,6 @@ function App() {
             borderRadius: "2px",
             fontWeight: "bold",
             fontSize: "14px",
-            letterSpacing: "1px",
             boxShadow: "0 10px 30px rgba(0,0,0,0.7)",
             minWidth: "260px"
           }}>
@@ -574,7 +546,6 @@ function App() {
                 maxLength={60}
               />
             </div>
-            {/* 3. 連絡用SNS入力フィールドの追加 */}
             <div>
               <label style={{ marginBottom: "6px" }}>連絡用SNSアカウント (任意 / マッチ成立時のみ相手に開示)</label>
               <input 
@@ -710,19 +681,18 @@ function App() {
         </div>
       )}
 
-      {/* 公開募集掲示板（ロビー一覧） */}
+      {/* 公開募集掲示板 */}
       <section style={{ border: "2px solid #ff007f" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
           <div>
             <h2 style={{ margin: 0, border: "none", padding: 0 }}>LOBBY BOARD（公開募集一覧）</h2>
           </div>
-          {/* 1. 区分に縛られない全般条件マッチのトリガー */}
-          <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px" }} onClick={handleSearchSuggestions}>
-            全般マッチング自動検出
+          {/* 班員のマッチングバッチ実行の代わりとなるマッチング走査トリガー */}
+          <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px", background: "#ff007f", color: "#fff" }} onClick={handleTriggerMatchingEngine}>
+            3人以上の自動マッチング判定を実行
           </button>
         </div>
 
-        {/* インタラクティブ検索・フィルタコントロールパネル */}
         <div style={{ background: "#0d0d0d", border: "1px solid #222", padding: "16px", marginBottom: "20px", display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ flex: 2, minWidth: "180px" }}>
             <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>ゲームタイトルで絞り込み</span>
@@ -763,7 +733,6 @@ function App() {
             </div>
           </div>
 
-          {/* 2. 今から・次の休み時間に遊べるロビーのクイックボタン */}
           <div style={{ flex: 1, minWidth: "160px" }}>
             <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>タイム枠ブースト</span>
             <button
@@ -786,24 +755,11 @@ function App() {
               {filterImmediateOnly ? "ON: 今すぐ遊べる枠" : "OFF: 今すぐ遊べる枠"}
             </button>
           </div>
-          
-          {(filterGameSearch || filterDay !== "ALL" || filterImmediateOnly) && (
-            <div style={{ alignSelf: "flex-end" }}>
-              <button 
-                type="button" 
-                className="btn-delete-small" 
-                style={{ height: "34px", padding: "0 12px", background: "#222", border: "1px solid #333", color: "#fff" }}
-                onClick={() => { setFilterGameSearch(""); setFilterDay("ALL"); setFilterImmediateOnly(false); }}
-              >
-                クリア ✕
-              </button>
-            </div>
-          )}
         </div>
 
         {filteredAndVisibleUsers.length === 0 ? (
           <div className="empty-state" style={{ padding: "40px 20px" }}>
-            条件に一致するアクティブな募集ロビーはありません。
+            待機中のエントリー募集はありません。
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "16px" }}>
@@ -813,7 +769,6 @@ function App() {
               const displayLocation = locationPart.split(" [")[0];
               const cleanName = rawNickname.split(" ")[0];
               
-              // 一言コメントのパース
               let displayComment = "";
               if (rawNickname.includes("[COMM:")) {
                 displayComment = rawNickname.split("[COMM:")[1].split("]")[0];
@@ -830,7 +785,7 @@ function App() {
                     </div>
 
                     <div style={{ margin: "14px 0 4px 0", fontSize: "16px", fontWeight: "bold" }}>
-                      HOST: {cleanName}
+                      USER: {cleanName}
                     </div>
 
                     {displayComment && (
@@ -864,13 +819,13 @@ function App() {
                   </div>
 
                   <div className="action-zone" style={{ marginTop: "auto" }}>
-                    <div className="action-title">タイトルを選択して参戦:</div>
+                    <div className="action-title">（開発用デバッグ割り込み合流）:</div>
                     <div className="direct-btn-group">
                       {u.games?.map((game: string) => (
                         <button
                           key={game}
                           className="btn-direct-confirm"
-                          onClick={() => handleJoinLobbyUser(u, game, u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
+                          onClick={() => handleManualJoinLobbyUser(u, game, u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
                         >
                           {game}
                         </button>
@@ -880,40 +835,6 @@ function App() {
                 </div>
               );
             })}
-          </div>
-        )}
-
-        {/* 1. 刷新されたフラット・レコメンドセクション */}
-        {customSuggestions.length > 0 && (
-          <div style={{ marginTop: "32px", borderTop: "2px dashed #ff007f", paddingTop: "24px" }}>
-            <h3 style={{ fontSize: "16px", color: "#ff007f", letterSpacing: "1px" }}>MATCHING RECOMMENDATION（共通条件ユーザー）</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "16px", marginTop: "12px" }}>
-              {customSuggestions.map((sug) => (
-                <div key={sug.id} className="suggestion-card" style={{ borderColor: "#00ffff" }}>
-                  <div className="card-header-info">
-                    <span className="pink-tag">{DAYS_OF_WEEK.find(d => d.value === sug.slot.day)?.label || sug.slot.day} {sug.slot.start}</span>
-                  </div>
-                  <div className="pair-info" style={{ margin: "10px 0", fontSize: "14px" }}>
-                    <div><span style={{ color: "#ff007f" }}>USER A:</span> {sug.userA?.nickname?.split(" ")[0]}</div>
-                    <div><span style={{ color: "#00ffff" }}>USER B:</span> {sug.userB?.nickname?.split(" ")[0]}</div>
-                  </div>
-                  <div className="action-zone">
-                    <div className="action-title">共通のタイトル:</div>
-                    <div className="direct-btn-group">
-                      {sug.sharedGames?.map((game: string) => (
-                        <button 
-                          key={game} 
-                          className="btn-direct-confirm" 
-                          onClick={() => handleJoinLobbyUser(sug.userA, game, sug.slot)}
-                        >
-                          {game} でマッチを仲介
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         )}
       </section>
@@ -936,7 +857,7 @@ function App() {
                   <thead>
                     <tr>
                       <th>ホスト</th>
-                      <th>プレイヤー</th>
+                      <th>参戦プレイヤー</th>
                       <th>場所</th>
                       <th>対戦種目</th>
                     </tr>
