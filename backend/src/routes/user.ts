@@ -13,6 +13,7 @@ router.post("/register", (req, res) => {
   const id = store.generateId("user");
   const user = {
     id,
+    role: "student" as const,
     ...parseResult.data,
     createdAt: new Date().toISOString(),
   };

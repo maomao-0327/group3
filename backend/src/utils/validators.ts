@@ -7,7 +7,6 @@ export const availabilitySlotSchema = z.object({
 });
 
 export const registerSchema = z.object({
-  role: z.enum(["student", "professor"]),
   nickname: z.string().min(1),
   games: z.array(z.string().min(1)).min(1),
   availability: z.array(availabilitySlotSchema).min(1),

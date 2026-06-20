@@ -1,126 +1,127 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, AvailabilitySlot, RoomPayload, UserPayload, MatchSuggestion } from "./api";
+import { useEffect, useMemo, useState } from "react";
+import { api, AvailabilitySlot, UserPayload, MatchSuggestion } from "./api";
 
-// 大学の標準的な時限定義
-const TIME_SLOTS = [
-  { id: "1", label: "1限", start: "08:40", end: "09:55" },
-  { id: "2", label: "2限", start: "10:10", end: "11:25" },
-  { id: "3", label: "3限", start: "12:15", end: "13:30" },
-  { id: "4", label: "4限", start: "13:45", end: "15:00" },
-  { id: "5", label: "5限", start: "15:15", end: "16:30" },
-  { id: "6", label: "6限", start: "16:45", end: "18:00" },
-  { id: "7", label: "放課後", start: "18:40", end: "21:10" },
+// 選択肢となる標準の時限定義
+const TIME_SLOT_OPTIONS = [
+  { id: "1", label: "1限 (08:40-09:55)", start: "08:40", end: "09:55" },
+  { id: "2", label: "2限 (10:10-11:25)", start: "10:10", end: "11:25" },
+  { id: "3", label: "3限 (12:15-13:30)", start: "12:15", end: "13:30" },
+  { id: "4", label: "4限 (13:45-15:00)", start: "13:45", end: "15:00" },
+  { id: "5", label: "5限 (15:15-16:30)", start: "15:15", end: "16:30" },
+  { id: "6", label: "6限 (16:45-18:00)", start: "16:45", end: "18:00" },
+  { id: "7", label: "放課後 (18:30-ANYTIME)", start: "18:30", end: "ANYTIME" },
 ];
 
-const BREAK_TIME_SLOTS = [
-  { id: "1", label: "1限の休み時間", start: "09:55", end: "10:10" },
-  { id: "2", label: "2限の休み時間", start: "11:25", end: "12:10" },
-  { id: "3", label: "3限の休み時間", start: "13:30", end: "13:40" },
-  { id: "4", label: "4限の休み時間", start: "15:00", end: "15:15" },
-  { id: "5", label: "5限の休み時間", start: "16:30", end: "16:45" },
-  { id: "6", label: "6限の休み時間", start: "18:00", end: "18:15" },
+const DAYS_OF_WEEK = [
+  { value: "Mon", label: "月曜日" },
+  { value: "Tue", label: "火曜日" },
+  { value: "Wed", label: "水曜日" },
+  { value: "Thu", label: "木曜日" },
+  { value: "Fri", label: "金曜日" },
 ];
 
-const DAYS = [
-  { id: "Mon", label: "月" },
-  { id: "Tue", label: "火" },
-  { id: "Wed", label: "水" },
-  { id: "Thu", label: "木" },
-  { id: "Fri", label: "金" },
+const HOBBY_TAG_GROUPS = [
+  {
+    category: "アナログゲーム",
+    tags: ["ボードゲーム", "カタン", "カルカソンヌ", "人狼ゲーム", "ドミニオン", "将棋", "チェス"],
+  },
+  {
+    category: "伝統・麻雀",
+    tags: ["麻雀", "三人麻雀", "雀魂"],
+  },
+  {
+    category: "Switch・対戦協力",
+    tags: ["スマブラ", "マリオカート", "スプラトゥーン", "ポケモン", "モンハン"],
+  },
+  {
+    category: "カードゲーム",
+    tags: ["ポケモンカード", "遊戯王", "デュエマ", "MTG", "シャドウバース"],
+  },
+  {
+    category: "PC・スマホ",
+    tags: ["Apex Legends", "VALORANT", "LoL", "Minecraft"],
+  },
 ];
 
-const defaultAvailability = [{ day: "Mon", start: "18:00", end: "19:30" }];
+// トースト通知の型定義
+type Toast = {
+  id: number;
+  message: string;
+  type: "success" | "error" | "info";
+};
 
 function App() {
   const [users, setUsers] = useState<any[]>([]);
-  const [rooms, setRooms] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
   const [suggestions, setSuggestions] = useState<MatchSuggestion[]>([]);
+
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [loading, setLoading] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  const [view, setView] = useState<"dashboard" | "event">("dashboard");
+  const [showDebug, setShowDebug] = useState<boolean>(false);
+  const [activeEvent, setActiveEvent] = useState<any>(null);
+  const [matchedPeople, setMatchedPeople] = useState<string[]>([]);
 
-  const [userForm, setUserForm] = useState<UserPayload>({
+  const [otherTagInput, setOtherTagInput] = useState<string>("");
+
+  // "none" | "standard" | "custom"
+  const [activeModal, setActiveModal] = useState<"none" | "standard" | "custom">("none");
+
+  // セレクトボックス選択値の一時ステート
+  const [selectedDay, setSelectedDay] = useState<string>("Mon");
+  const [selectedSlotIndex, setSelectedSlotIndex] = useState<number>(0);
+
+  // カスタム自由入力値の一時ステート
+  const [customDay, setCustomDay] = useState<string>("Mon");
+  const [customTimeText, setCustomTimeText] = useState<string>("");
+
+  // トースト一覧を管理するState
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  // ページ再読み込み時にも削除状態を記憶しておくための仕組み
+  const [deletedIds, setDeletedIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("fight_club_deleted_ids");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // メインフォーム（一言コメント用として comment フィールドを追加）
+  const [userForm, setUserForm] = useState<UserPayload & { customLocation: string; comment: string }>({
     role: "student",
     nickname: "",
-    games: [""],
-    availability: defaultAvailability,
+    games: [],
+    availability: [],
+    customLocation: "",
+    comment: "",
   });
 
-  const [roomForm, setRoomForm] = useState<RoomPayload>({
-    name: "",
-    building: "",
-    capacity: 4,
-    availableSlots: defaultAvailability,
-  });
-
-  const [selectedSuggestion, setSelectedSuggestion] = useState<MatchSuggestion | null>(null);
-  const [selectedGame, setSelectedGame] = useState<string>("");
-  const [userSlotGroup, setUserSlotGroup] = useState<"class" | "break">("class");
-  const [roomSlotGroup, setRoomSlotGroup] = useState<"class" | "break">("class");
-  const [view, setView] = useState<"dashboard" | "waiting" | "event">("dashboard");
-  const [waitCount, setWaitCount] = useState<number>(0);
-  const [matchedPeople, setMatchedPeople] = useState<string[]>([]);
-  const waitingTimerRef = useRef<number | null>(null);
-  const [eventDetail] = useState({
-    id: "event-01",
-    title: "麻雀会：Mon3・3A201",
-    location: "3A201",
-    time: "18:30 - 21:00",
-    participants: ["太郎", "花子", "教授A"],
-  });
-
-  const userSlots = userSlotGroup === "class" ? TIME_SLOTS : BREAK_TIME_SLOTS;
-  const roomSlots = roomSlotGroup === "class" ? TIME_SLOTS : BREAK_TIME_SLOTS;
-
-  const placeholderParticipants = ["太郎", "花子", "次郎", "三郎"];
-  const buildMatchedParticipants = (count: number) => {
-    const actual = users.map((user) => user.nickname || `User${user.id}`).slice(0, count);
-    return [...actual, ...placeholderParticipants].slice(0, count);
+  // トースト通知をトリガーする関数
+  const addToast = (message: string, type: "success" | "error" | "info" = "success") => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    
+    // 3秒後に自動消去
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3000);
   };
-
-  type SlotDefinition = typeof TIME_SLOTS[number];
-
-  const studentOptions = useMemo(
-    () => users.filter((user) => user.role === "student"),
-    [users]
-  );
-  const professorOptions = useMemo(
-    () => users.filter((user) => user.role === "professor"),
-    [users]
-  );
 
   const refreshAll = async () => {
     setLoading(true);
     try {
-      const [usersData, roomsData, matchesData] = await Promise.all([
+      const [u, m] = await Promise.all([
         api.getUsers(),
-        api.getRooms(),
         api.getMatches(),
       ]);
-      setUsers(usersData);
-      setRooms(roomsData);
-      setMatches(matchesData);
-    } catch (error) {
-      setStatusMessage(`読み込みエラー: ${error}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadSuggestions = async () => {
-    setLoading(true);
-    try {
-      const suggestionsData = await api.getSuggestions();
-      setSuggestions(suggestionsData);
-      setShowSuggestions(true);
-      if (suggestionsData.length === 0) {
-        setStatusMessage("マッチング候補がありません。ユーザーと教室を登録してください。");
-      } else {
-        setStatusMessage(`${suggestionsData.length}件のマッチング候補を見つけました。`);
-      }
-    } catch (error) {
-      setStatusMessage(`提案読み込みエラー: ${error}`);
+      setUsers(u || []);
+      setMatches(m || []);
+    } catch (err: any) {
+      setStatusMessage(`データの同期に失敗しました: ${err.message}`);
+      addToast(`同期失敗: ${err.message}`, "error");
     } finally {
       setLoading(false);
     }
@@ -130,234 +131,303 @@ function App() {
     refreshAll();
   }, []);
 
-  const onUserSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleAddStandardTime = () => {
+    const targetSlot = TIME_SLOT_OPTIONS[selectedSlotIndex];
+    if (!targetSlot) return;
+
+    const newSlot: AvailabilitySlot = {
+      day: selectedDay,
+      start: targetSlot.start,
+      end: targetSlot.end
+    };
+
+    const exists = userForm.availability.some(
+      s => s.day === newSlot.day && s.start === newSlot.start && s.end === newSlot.end
+    );
+
+    if (!exists) {
+      setUserForm({
+        ...userForm,
+        availability: [...userForm.availability, newSlot]
+      });
+      setStatusMessage(`スケジュールを追加しました。`);
+      addToast("空き時間をリストに追加しました", "info");
+    } else {
+      setStatusMessage("その枠は既に登録されています。");
+      addToast("その枠は既に登録されています", "error");
+    }
+    setActiveModal("none");
+  };
+
+  const handleAddCustomTime = () => {
+    const text = customTimeText.trim();
+    if (!text) {
+      alert("時間帯のテキストを入力してください。");
+      return;
+    }
+
+    const newSlot: AvailabilitySlot = {
+      day: customDay,
+      start: text,
+      end: "CUSTOM"
+    };
+
+    const exists = userForm.availability.some(
+      s => s.day === newSlot.day && s.start === newSlot.start
+    );
+
+    if (!exists) {
+      setUserForm({
+        ...userForm,
+        availability: [...userForm.availability, newSlot]
+      });
+      setCustomTimeText("");
+      setStatusMessage(`カスタム時間「${text}」を追加しました。`);
+      addToast("カスタム時間を追加しました", "info");
+    } else {
+      setStatusMessage("そのカスタム時間は既に存在します。");
+      addToast("そのカスタム時間は既に存在します", "error");
+    }
+    setActiveModal("none");
+  };
+
+  const handleRemoveSelectedSlot = (index: number) => {
+    const nextList = userForm.availability.filter((_, i) => i !== index);
+    setUserForm({ ...userForm, availability: nextList });
+    addToast("空き時間を取り消しました", "info");
+  };
+
+  const handleToggleTag = (tag: string) => {
+    const isSelected = userForm.games.includes(tag);
+    const nextGames = isSelected
+      ? userForm.games.filter((g) => g !== tag)
+      : [...userForm.games, tag];
+    setUserForm({ ...userForm, games: nextGames });
+  };
+
+  const handleAddCustomTag = () => {
+    const trimmed = otherTagInput.trim();
+    if (!trimmed) return;
+    if (!userForm.games.includes(trimmed)) {
+      setUserForm({ ...userForm, games: [...userForm.games, trimmed] });
+      setOtherTagInput("");
+      addToast(`タイトル「${trimmed}」を追加しました`, "info");
+    }
+  };
+
+  const handleDeleteUser = async (id: string) => {
+    if (!confirm("このエントリー募集を取り消しますか？")) return;
+    
+    setLoading(true);
+    setStatusMessage("エントリー情報を削除しています...");
+
+    const nextDeletedIds = [...deletedIds, id];
+    setDeletedIds(nextDeletedIds);
+    localStorage.setItem("fight_club_deleted_ids", JSON.stringify(nextDeletedIds));
+
+    try {
+      if (api && typeof api.deleteRoom === "function") {
+        await api.deleteRoom(id);
+      }
+    } catch (err) {
+      console.warn("サーバー側のAPIは未対応です。フロントエンド側で永久非表示にしました。");
+    }
+
+    setStatusMessage("エントリー情報を削除しました。");
+    addToast("募集エントリーを取り消しました", "success");
+    setLoading(false);
+  };
+
+  const onUserSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!userForm.nickname.trim()) {
       setStatusMessage("ニックネームを入力してください。");
+      addToast("ニックネームを入力してください", "error");
       return;
     }
-    if (userForm.games.length === 0 || !userForm.games[0]) {
-      setStatusMessage("ゲーム嗜好を入力してください。");
+    if (!userForm.customLocation.trim()) {
+      setStatusMessage("対戦希望場所を入力してください。");
+      addToast("対戦希望場所を入力してください", "error");
       return;
     }
-
-    setLoading(true);
-    try {
-      await api.registerUser(userForm);
-      setStatusMessage("ユーザーを登録しました。");
-      setUserForm({ role: "student", nickname: "", games: [""], availability: defaultAvailability });
-      await refreshAll();
-    } catch (error) {
-      setStatusMessage(`登録エラー: ${error}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onRoomSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!roomForm.name.trim()) {
-      setStatusMessage("教室名を入力してください。");
+    if (userForm.availability.length === 0) {
+      setStatusMessage("空き時間を最低1つ以上選択・登録してください。");
+      addToast("空き時間を登録してください", "error");
       return;
     }
-    if (!roomForm.building.trim()) {
-      setStatusMessage("建物を入力してください。");
+    if (userForm.games.length === 0) {
+      setStatusMessage("タイトルを1つ以上選択してください。");
+      addToast("タイトルを選択してください", "error");
       return;
     }
 
     setLoading(true);
     try {
-      await api.createRoom(roomForm);
-      setStatusMessage("教室を登録しました。");
-      setRoomForm({ name: "", building: "", capacity: 4, availableSlots: defaultAvailability });
-      await refreshAll();
-    } catch (error) {
-      setStatusMessage(`登録エラー: ${error}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const confirmMatch = async (suggestion: MatchSuggestion, game: string) => {
-    setLoading(true);
-    try {
-      await api.createMatch({
-        studentId: suggestion.studentId,
-        professorId: suggestion.professorId,
-        roomId: suggestion.roomId,
-        matchedGame: game,
+      await api.createRoom({
+        building: "学内",
+        name: userForm.customLocation,
+        capacity: 4,
+        availableSlots: userForm.availability
       });
-      setStatusMessage("マッチングを確定しました。");
-      setSelectedSuggestion(null);
-      setSelectedGame("");
-      setSuggestions(suggestions.filter((s) => s !== suggestion));
+
+      // ニックネーム、場所、そして一言コメント（ある場合）をパース可能な形で一つの文字列に結合して送信
+      const commentString = userForm.comment.trim() ? ` //💬:${userForm.comment.trim()}` : "";
+      await api.registerUser({
+        role: userForm.role,
+        nickname: `${userForm.nickname} (@${userForm.customLocation})${commentString}`,
+        games: userForm.games,
+        availability: userForm.availability
+      });
+
+      setStatusMessage(`「${userForm.nickname}」の募集を掲示板に公開しました。`);
+      addToast("新規募集の投稿が完了しました！", "success");
+      
+      setUserForm({ role: "student", nickname: "", games: [], availability: [], customLocation: "", comment: "" });
       await refreshAll();
-    } catch (error) {
-      setStatusMessage(`マッチングエラー: ${error}`);
+    } catch (err: any) {
+      setStatusMessage(`募集公開エラー: ${err.message}`);
+      addToast("投稿に失敗しました", "error");
     } finally {
       setLoading(false);
     }
   };
 
-  const updateAvailability = (value: string, index: number, key: keyof AvailabilitySlot) => {
-    setUserForm((prev) => {
-      const availability = [...prev.availability];
-      availability[index] = { ...availability[index], [key]: value };
-      return { ...prev, availability };
-    });
+  const handleJoinLobbyUser = async (hostUser: any, chosenGame: string, slot: AvailabilitySlot) => {
+    setLoading(true);
+    try {
+      await api.confirmMatch({
+        studentId: hostUser.id,
+        professorId: "direct-join-user",
+        roomId: "custom-room",
+        matchedGame: chosenGame,
+        slot: slot,
+      });
+      setActiveEvent({
+        room: { building: "指定場所", name: hostUser.nickname.split("@")[1]?.split(" //")[0] || "学内教室" },
+        slot: slot,
+        matchedGame: chosenGame,
+      });
+      setMatchedPeople([hostUser.nickname.split(" ")[0], "あなた"]);
+      setView("event");
+      setStatusMessage("マッチングが成立しました！");
+      addToast("マッチングが成立しました！対戦画面へ移行します", "success");
+    } catch (err: any) {
+      setStatusMessage(`参加エラー: ${err.message}`);
+      addToast("マッチング成立に失敗しました", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const updateRoomAvailability = (value: string, index: number, key: keyof AvailabilitySlot) => {
-    setRoomForm((prev) => {
-      const availableSlots = [...prev.availableSlots];
-      availableSlots[index] = { ...availableSlots[index], [key]: value };
-      return { ...prev, availableSlots };
-    });
-  };
-
-  const handleTimeSlotChange = (slot: SlotDefinition) => {
-    updateAvailability(slot.start, 0, "start");
-    updateAvailability(slot.end, 0, "end");
-  };
-
-  const handleRoomTimeSlotChange = (slot: SlotDefinition) => {
-    updateRoomAvailability(slot.start, 0, "start");
-    updateRoomAvailability(slot.end, 0, "end");
-  };
-
-  useEffect(() => {
-    return () => {
-      if (waitingTimerRef.current !== null) {
-        clearInterval(waitingTimerRef.current);
+  const handleSearchSuggestions = async () => {
+    setLoading(true);
+    setStatusMessage("マッチング候補を自動探索中...");
+    try {
+      const res = await api.getSuggestions();
+      setSuggestions(res || []);
+      if (!res || res.length === 0) {
+        setStatusMessage("条件が完全一致する自動候補はありませんでした。");
+        addToast("完全一致する自動候補はありませんでした", "info");
+      } else {
+        addToast(`${res.length}件のマッチング候補を検出しました`, "success");
       }
-    };
-  }, []);
-
-  const startMatchWaiting = () => {
-    if (view === "waiting") {
-      return;
+    } catch (err: any) {
+      setStatusMessage(`探索エラー: ${err.message}`);
+      addToast("自動探索中にエラーが発生しました", "error");
+    } finally {
+      setLoading(false);
     }
+  };
 
-    setView("waiting");
-    setWaitCount(0);
-    setMatchedPeople([]);
-    setStatusMessage("マッチング待機中... 4人揃うまでお待ちください。");
-
-    if (waitingTimerRef.current !== null) {
-      clearInterval(waitingTimerRef.current);
-    }
-
-    waitingTimerRef.current = window.setInterval(() => {
-      setWaitCount((prevCount) => {
-        const nextCount = Math.min(prevCount + 1, 4);
-        setMatchedPeople(buildMatchedParticipants(nextCount));
-
-        if (nextCount < 4) {
-          setStatusMessage(`${nextCount}人がマッチングしました。あと${4 - nextCount}人です。`);
-        } else {
-          setStatusMessage("4人揃いました！イベント詳細画面に移動します。");
-          if (waitingTimerRef.current !== null) {
-            clearInterval(waitingTimerRef.current);
-            waitingTimerRef.current = null;
-          }
-          setTimeout(() => {
-            setView("event");
-          }, 1200);
-        }
-
-        return nextCount;
+  const handleDirectConfirm = async (sug: MatchSuggestion, game: string) => {
+    setLoading(true);
+    try {
+      await api.confirmMatch({
+        studentId: sug.student.id,
+        professorId: sug.professor.id,
+        roomId: sug.room.id,
+        matchedGame: game,
+        slot: sug.slot,
       });
-    }, 1200);
-  };
-
-  const backToDashboard = () => {
-    if (waitingTimerRef.current !== null) {
-      clearInterval(waitingTimerRef.current);
-      waitingTimerRef.current = null;
+      setStatusMessage("マッチングが成立しました。");
+      addToast("アルゴリズムマッチングが確定しました！", "success");
+      setSuggestions([]);
+      await refreshAll();
+    } catch (err: any) {
+      setStatusMessage(`確定エラー: ${err.message}`);
+      addToast("確定処理に失敗しました", "error");
+    } finally {
+      setLoading(false);
     }
-    setView("dashboard");
-    setStatusMessage("");
   };
 
-  if (view === "waiting") {
-    return (
-      <div className="app">
-        <header>
-          <h1>Classroom Match</h1>
-          <p>4人マッチングを待機しています。</p>
-        </header>
-        <section>
-          <div className="transition-card">
-            <div className="card-title">待機画面</div>
-            <div className="card-field" style={{ justifyContent: "flex-start", gap: "12px" }}>
-              <span className="badge badge-info">{waitCount < 4 ? "待機中" : "完了"}</span>
-              <span>
-                {waitCount < 4
-                  ? `${waitCount}人がマッチングしました。あと ${4 - waitCount} 人です。`
-                  : "4人揃いました。イベント詳細に移動します。"}
-              </span>
-            </div>
-            <div className="progress-bar">
-              <div className={`progress-fill ${waitCount === 4 ? "progress-filled" : ""}`} style={{ width: `${(waitCount / 4) * 100}%` }} />
-            </div>
-            {matchedPeople.length > 0 && (
-              <div style={{ marginTop: "12px" }}>
-                <span className="card-label">マッチングした人</span>
-                <div className="chip-group">
-                  {matchedPeople.map((participant) => (
-                    <span key={participant} className="badge badge-success">
-                      {participant}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            <button type="button" onClick={backToDashboard} className="button-secondary">
-              ホームに戻る
-            </button>
-          </div>
-        </section>
-      </div>
-    );
-  }
+  const visibleUsers = useMemo(() => {
+    return users.filter((u) => !deletedIds.includes(u.id));
+  }, [users, deletedIds]);
 
   if (view === "event") {
     return (
       <div className="app">
+        {/* トースト通知コンポーネント（固定配置） */}
+        <div style={{
+          position: "fixed",
+          top: "20px",
+          right: "20px",
+          zIndex: 9999,
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px"
+        }}>
+          {toasts.map((t) => (
+            <div key={t.id} style={{
+              background: t.type === "success" ? "#00ff66" : t.type === "error" ? "#ff0055" : "#00ccff",
+              color: "#000",
+              padding: "12px 24px",
+              borderRadius: "4px",
+              fontWeight: "bold",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+              minWidth: "240px",
+              animation: "fadeIn 0.3s ease-out"
+            }}>
+              {t.message}
+            </div>
+          ))}
+        </div>
+
         <header>
-          <h1>Classroom Match</h1>
-          <p>マッチングが完了しました。イベント詳細を確認してください。</p>
+          <h1>FIGHT CLUB</h1>
+          <p className="subtitle">MATCH SETTLED</p>
         </header>
-        <section>
-          <div className="event-detail-card">
-            <div className="card-title">イベント詳細</div>
-            <div className="card-field">
-              <span className="card-label">イベント</span>
-              <span className="card-value">{eventDetail.title}</span>
+        <section style={{ borderColor: "#ff007f" }}>
+          <div style={{ textAlign: "center", marginBottom: "32px" }}>
+            <h2 style={{ color: "#ff007f", border: "none", padding: 0, fontSize: "2.5rem" }}>MATCH CONFIRMED</h2>
+          </div>
+          <div className="event-grid">
+            <div className="event-card">
+              <h3>LOCATION</h3>
+              <p className="highlight">{activeEvent?.room?.name || "指定教室"}</p>
             </div>
-            <div className="card-field">
-              <span className="card-label">場所</span>
-              <span className="card-value">{eventDetail.location}</span>
+            <div className="event-card">
+              <h3>TIME</h3>
+              <p className="highlight" style={{ color: "#ffffff" }}>
+                {activeEvent?.slot ? `${DAYS_OF_WEEK.find(d => d.value === activeEvent.slot.day)?.label || activeEvent.slot.day} ${activeEvent.slot.start}` : "SLOT"}
+              </p>
             </div>
-            <div className="card-field">
-              <span className="card-label">時間</span>
-              <span className="card-value">{eventDetail.time}</span>
+          </div>
+        
+          <div className="event-card" style={{ marginTop: "16px" }}>
+            <h3>SELECTED TITLE</h3>
+            <p className="highlight" style={{ color: "#ff007f" }}>{activeEvent?.matchedGame || "GAME"}</p>
+          </div>
+          <div className="event-card" style={{ marginTop: "16px" }}>
+            <h3>PLAYERS</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "8px" }}>
+              {matchedPeople.map((p) => <span key={p} className="badge">{p}</span>)}
             </div>
-            <div className="card-field" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-              <span className="card-label">参加者</span>
-              <div style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {(matchedPeople.length > 0 ? matchedPeople : eventDetail.participants).map((participant) => (
-                  <span key={participant} className="badge badge-success">
-                    {participant}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div style={{ marginTop: "20px", display: "flex", gap: "12px", flexWrap: "wrap" }}>
-              <button type="button" onClick={backToDashboard} className="button-secondary">
-                ホームに戻る
-              </button>
-            </div>
+          </div>
+ 
+          <div style={{ textAlign: "center", marginTop: "32px" }}>
+            <button onClick={() => { setView("dashboard"); refreshAll(); }}>掲示板に戻る</button>
           </div>
         </section>
       </div>
@@ -366,415 +436,376 @@ function App() {
 
   return (
     <div className="app">
+      {/* トースト通知コンポーネント（固定配置、CSSアニメーション用のfadeInをインライン風に設定） */}
+      <div style={{
+        position: "fixed",
+        top: "20px",
+        right: "20px",
+        zIndex: 9999,
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px"
+      }}>
+        {toasts.map((t) => (
+          <div key={t.id} style={{
+            background: t.type === "success" ? "#ff007f" : t.type === "error" ? "#ff3333" : "#ffffff",
+            color: t.type === "info" ? "#000000" : "#ffffff",
+            padding: "14px 24px",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: "2px",
+            fontWeight: "bold",
+            fontSize: "14px",
+            letterSpacing: "1px",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.7)",
+            minWidth: "260px",
+            boxSizing: "border-box",
+            transition: "all 0.3s ease"
+          }}>
+            <span style={{ marginRight: "8px" }}>{t.type === "success" ? "✓" : t.type === "error" ? "✗" : "ℹ"}</span>
+            {t.message}
+          </div>
+        ))}
+      </div>
+
       <header>
-        <h1>Classroom Match</h1>
-        <p>教授・生徒・教室の登録とマッチングを試せます。</p>
+        <h1>F I G H T・C L U B</h1>
+        <p className="subtitle">P2P CLASSROOM MATCHING SYSTEM</p>
       </header>
 
-      <section>
-        <h2>サーバー状態</h2>
-        <p>{loading ? "読み込み中..." : "サーバー接続中"}</p>
-        {statusMessage && <p style={{ color: "#10b981" }}>{statusMessage}</p>}
-        <button type="button" onClick={refreshAll} disabled={loading}>
-          最新データを取得
-        </button>
-      </section>
+      {statusMessage && <div className="status-banner">{statusMessage}</div>}
 
       <section>
-        <h2>ユーザー登録</h2>
+        <h2>対戦・マッチの新規募集をかける</h2>
         <form onSubmit={onUserSubmit}>
-          <div className="form-grid">
-            <label>
-              役割
-              <select
-                value={userForm.role}
-                onChange={(event) => setUserForm({ ...userForm, role: event.target.value as "student" | "professor" })}
-              >
-                <option value="student">学生</option>
-                <option value="professor">教授</option>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+            <label style={{ margin: 0 }}>
+              区分
+              <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as "student" | "professor" })}>
+                <option value="student">生徒 (STUDENT)</option>
+                <option value="professor">教授 (PROFESSOR)</option>
               </select>
             </label>
-            <label>
+            <label style={{ margin: 0 }}>
               ニックネーム
-              <input
-                value={userForm.nickname}
-                onChange={(event) => setUserForm({ ...userForm, nickname: event.target.value })}
-                placeholder="例: Taro"
-                required
-              />
+              <input type="text" placeholder="匿名" value={userForm.nickname} onChange={(e) => setUserForm({ ...userForm, nickname: e.target.value })} required />
             </label>
-            <label>
-              ゲーム嗜好（カンマ区切り）
-              <input
-                value={userForm.games.join(",")}
-                onChange={(event) => setUserForm({ ...userForm, games: event.target.value.split(",").map((v) => v.trim()).filter(Boolean) })}
-                placeholder="例: FPS, RPG"
-                required
-              />
+            <label style={{ margin: 0 }}>
+              開催場所の指定
+              <input type="text" placeholder="例: 7A201教室, ラウンジ" value={userForm.customLocation} onChange={(e) => setUserForm({ ...userForm, customLocation: e.target.value })} required />
             </label>
           </div>
 
-          <div>
-            <label>
-              曜日
-              <select
-                value={userForm.availability[0].day}
-                onChange={(event) => updateAvailability(event.target.value, 0, "day")}
-                required
-              >
-                {DAYS.map((day) => (
-                  <option key={day.id} value={day.id}>
-                    {day.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          {/* 新規追加：一言コメントのテキストボックス */}
+          <div style={{ marginBottom: "24px" }}>
+            <label style={{ marginBottom: "6px" }}>一言コメント（掲示板に掲載されます / 任意）</label>
+            <input 
+              type="text" 
+              placeholder="例: 初心者歓迎です！気軽にどうぞ！、ジョイコン持参します" 
+              value={userForm.comment} 
+              onChange={(e) => setUserForm({ ...userForm, comment: e.target.value })} 
+              maxLength={60}
+            />
           </div>
 
-          <div>
-            <label>時間帯を選択</label>
-            <div className="button-group" style={{ marginBottom: "18px" }}>
-              <button
-                type="button"
-                className={`button-chip ${userSlotGroup === "class" ? "selected" : ""}`}
-                onClick={() => setUserSlotGroup("class")}
-              >
-                通常時間
+          <div style={{ marginBottom: "24px" }}>
+            <label style={{ marginBottom: "8px" }}>空き時間の選択（登録必須）</label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <button type="button" className="btn-select-trigger" onClick={() => setActiveModal("standard")}>
+                【空き時間選択】 曜日・時限リストから選ぶ
               </button>
-              <button
-                type="button"
-                className={`button-chip ${userSlotGroup === "break" ? "selected" : ""}`}
-                onClick={() => setUserSlotGroup("break")}
-              >
-                休み時間
+              <button type="button" className="btn-select-trigger custom-btn" onClick={() => setActiveModal("custom")}>
+                【カスタム】 例外的な時間を自由入力する
               </button>
             </div>
-            <div className="button-group">
-              {userSlots.map((slot) => (
-                <button
-                  key={slot.id}
-                  type="button"
-                  className={`button-chip ${userForm.availability[0].start === slot.start ? "selected" : ""}`}
-                  onClick={() => handleTimeSlotChange(slot)}
-                >
-                  {slot.label}
-                </button>
+
+            <div style={{ marginTop: "12px", background: "#0a0a0a", border: "1px solid #222", padding: "14px" }}>
+              <span className="tag-category-title" style={{ color: "#ff007f" }}>現在設定中の空き時間リスト (クリックで取り消し):</span>
+              {userForm.availability.length === 0 ? (
+                <div style={{ fontSize: "12px", color: "#555", marginTop: "4px" }}>時間を設定してください。上のボタンから追加できます。</div>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
+                  {userForm.availability.map((av, index) => {
+                    const dayLabel = DAYS_OF_WEEK.find(d => d.value === av.day)?.label || av.day;
+                    const timeLabel = av.end === "CUSTOM" ? av.start : `${av.start}-${av.end}`;
+                    return (
+                      <button
+                        key={index}
+                        type="button"
+                        className="selected-time-badge"
+                        onClick={() => handleRemoveSelectedSlot(index)}
+                        title="クリックして削除"
+                      >
+                        {dayLabel} : {timeLabel} <span style={{ color: "#ff007f", marginLeft: "4px" }}>×</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: "24px" }}>
+            <label style={{ marginBottom: "8px" }}>プレイしたいタイトル</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {HOBBY_TAG_GROUPS.map((group) => (
+                <div key={group.category} className="tag-group-box">
+                  <span className="tag-category-title">{group.category}</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    {group.tags.map((tag) => {
+                      const isSelected = userForm.games.includes(tag);
+                      return (
+                        <button key={tag} type="button" onClick={() => handleToggleTag(tag)} className={`tag-chip ${isSelected ? "active" : ""}`}>
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               ))}
             </div>
-            <small>選択中: {userForm.availability[0].start} - {userForm.availability[0].end}</small>
+            <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+              <input type="text" placeholder="その他のタイトル..." value={otherTagInput} onChange={(e) => setOtherTagInput(e.target.value)} style={{ flex: 1 }} />
+              <button type="button" onClick={handleAddCustomTag} className="btn-secondary" style={{ padding: "0 20px" }}>追加</button>
+            </div>
           </div>
 
-          <button type="submit" disabled={loading}>登録</button>
+          <button type="submit" disabled={loading} style={{ width: "100%" }}>募集を公開掲示板に投稿する</button>
         </form>
       </section>
 
-      <section>
-        <h2>教室登録</h2>
-        <form onSubmit={onRoomSubmit}>
-          <div className="form-grid">
-            <label>
-              教室名
-              <input
-                value={roomForm.name}
-                onChange={(event) => setRoomForm({ ...roomForm, name: event.target.value })}
-                placeholder="例: 201号室"
-                required
-              />
-            </label>
-            <label>
-              建物
-              <input
-                value={roomForm.building}
-                onChange={(event) => setRoomForm({ ...roomForm, building: event.target.value })}
-                placeholder="例: A棟"
-                required
-              />
-            </label>
-            <label>
-              定員
-              <input
-                type="number"
-                value={roomForm.capacity}
-                onChange={(event) => setRoomForm({ ...roomForm, capacity: Number(event.target.value) })}
-                min={1}
-                required
-              />
-            </label>
-          </div>
-
-          <div>
-            <label>
-              曜日
-              <select
-                value={roomForm.availableSlots[0].day}
-                onChange={(event) => updateRoomAvailability(event.target.value, 0, "day")}
-                required
-              >
-                {DAYS.map((day) => (
-                  <option key={day.id} value={day.id}>
-                    {day.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div>
-            <label>時間帯を選択</label>
-            <div className="button-group" style={{ marginBottom: "18px" }}>
-              <button
-                type="button"
-                className={`button-chip ${roomSlotGroup === "class" ? "selected" : ""}`}
-                onClick={() => setRoomSlotGroup("class")}
-              >
-                通常時間
-              </button>
-              <button
-                type="button"
-                className={`button-chip ${roomSlotGroup === "break" ? "selected" : ""}`}
-                onClick={() => setRoomSlotGroup("break")}
-              >
-                休み時間
-              </button>
+      {activeModal === "standard" && (
+        <div className="modal-overlay">
+          <div className="modal-mini-window">
+            <div className="modal-header">
+              <h2>空き時間選択</h2>
+              <button className="btn-close-modal" onClick={() => setActiveModal("none")}>×</button>
             </div>
-            <div className="button-group">
-              {roomSlots.map((slot) => (
-                <button
-                  key={slot.id}
-                  type="button"
-                  className={`button-chip ${roomForm.availableSlots[0].start === slot.start ? "selected" : ""}`}
-                  onClick={() => handleRoomTimeSlotChange(slot)}
-                >
-                  {slot.label}
-                </button>
-              ))}
+            <div className="modal-body">
+              <p className="tab-desc">曜日と時限を選択し、追加ボタンを押して確定してください。</p>
+              
+              <div style={{ marginBottom: "16px" }}>
+                <label>曜日</label>
+                <select value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)}>
+                  {DAYS_OF_WEEK.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: "24px" }}>
+                <label>時限・時間帯</label>
+                <select value={selectedSlotIndex} onChange={(e) => setSelectedSlotIndex(Number(e.target.value))}>
+                  {TIME_SLOT_OPTIONS.map((slot, idx) => (
+                    <option key={slot.id} value={idx}>{slot.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: "flex", gap: "12px" }}>
+                <button type="button" onClick={handleAddStandardTime} style={{ flex: 1 }}>この時間帯を追加</button>
+                <button type="button" className="btn-secondary" onClick={() => setActiveModal("none")} style={{ flex: 1 }}>キャンセル</button>
+              </div>
             </div>
-            <small>選択中: {roomForm.availableSlots[0].start} - {roomForm.availableSlots[0].end}</small>
           </div>
+        </div>
+      )}
 
-          <button type="submit" disabled={loading}>登録</button>
-        </form>
-      </section>
+      {activeModal === "custom" && (
+        <div className="modal-overlay">
+          <div className="modal-mini-window">
+            <div className="modal-header">
+              <h2>カスタム時間割登録</h2>
+              <button className="btn-close-modal" onClick={() => setActiveModal("none")}>×</button>
+            </div>
+            <div className="modal-body">
+              <p className="tab-desc">標準時間割に当てはまらない、特殊な時間を自由に入力して追加できます。</p>
 
-      <section>
-        <h2>自動マッチング</h2>
-        <p>条件が合うペアの提案を表示します。</p>
-        <div className="button-group" style={{ marginBottom: "16px" }}>
-          <button type="button" onClick={loadSuggestions} disabled={loading}>
-            マッチング候補を探す
-          </button>
-          <button type="button" onClick={startMatchWaiting} disabled={loading} className="button-secondary">
-            マッチングを開始
-          </button>
+              <div style={{ marginBottom: "16px" }}>
+                <label>曜日</label>
+                <select value={customDay} onChange={(e) => setCustomDay(e.target.value)}>
+                  {DAYS_OF_WEEK.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: "24px" }}>
+                <label>時間帯の直接指定</label>
+                <input 
+                  type="text" 
+                  placeholder="例: 12:00-12:50 (昼休み), 19:00以降" 
+                  value={customTimeText} 
+                  onChange={(e) => setCustomTimeText(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: "12px" }}>
+                <button type="button" onClick={handleAddCustomTime} style={{ flex: 1 }}>カスタム時間を追加</button>
+                <button type="button" className="btn-secondary" onClick={() => setActiveModal("none")} style={{ flex: 1 }}>キャンセル</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 公開募集掲示板（ロビー一覧） */}
+      <section style={{ border: "2px solid #ff007f" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
+          <div>
+            <h2 style={{ margin: 0, border: "none", padding: 0 }}>LOBBY BOARD（公開募集一覧）</h2>
+          </div>
+          <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px" }} onClick={handleSearchSuggestions}>マッチング自動検出</button>
         </div>
 
-        {view === "dashboard" && showSuggestions && suggestions.length > 0 && (
-          <div style={{ marginTop: "20px" }}>
-            <h3>マッチング候補 ({suggestions.length}件)</h3>
-            <div className="card-grid">
-              {suggestions.map((suggestion, idx) => {
-                const student = users.find((u) => u.id === suggestion.studentId);
-                const professor = users.find((u) => u.id === suggestion.professorId);
-                const room = rooms.find((r) => r.id === suggestion.roomId);
+        {visibleUsers.length === 0 ? (
+          <div className="empty-state">現在募集中のロビーはありません。最初の募集を投稿しよう。</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "16px" }}>
+            {visibleUsers.map((u) => {
+              // 文字列から「場所」と「一言コメント」を綺麗に分離抽出するパース処理
+              const rawNickname = u.nickname || "";
+              const locationPart = rawNickname.split("@")[1] || "学内";
+              const displayLocation = locationPart.split(" //")[0];
+              const cleanName = rawNickname.split(" ")[0];
+              
+              // コメント部分を抽出
+              let displayComment = "";
+              if (rawNickname.includes("//💬:")) {
+                displayComment = rawNickname.split("//💬:")[1];
+              }
+        
+              return (
+                <div key={u.id} className="suggestion-card" style={{ borderColor: "#333", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <span className="pink-tag" style={{ marginRight: "6px" }}>{u.role ? u.role.toUpperCase() : "STUDENT"}</span>
+                        <span className="white-tag">{displayLocation}</span>
+                      </div>
+                      <button className="btn-delete-small" onClick={() => handleDeleteUser(u.id)}>削除</button>
+                    </div>
 
-                return (
-                  <div key={idx} className="card">
-                    <div className="card-title">マッチング候補 #{idx + 1}</div>
-                    <div className="card-field">
-                      <span className="card-label">学生</span>
-                      <span className="card-value">{student?.nickname || "不明"}</span>
+                    <div style={{ margin: "14px 0 4px 0", fontSize: "16px", fontWeight: "bold" }}>
+                      ホスト: {cleanName}
                     </div>
-                    <div className="card-field">
-                      <span className="card-label">教授</span>
-                      <span className="card-value">{professor?.nickname || "不明"}</span>
-                    </div>
-                    {room && (
-                      <div className="card-field">
-                        <span className="card-label">教室</span>
-                        <span className="card-value">{room.name}</span>
+
+                    {/* 一言コメントが投稿されている場合のみカード内に綺麗に表示する */}
+                    {displayComment && (
+                      <div style={{
+                        background: "#111",
+                        borderLeft: "2px solid #ff007f",
+                        padding: "6px 10px",
+                        fontSize: "13px",
+                        color: "#ddd",
+                        margin: "8px 0 12px 0",
+                        fontStyle: "italic",
+                        wordBreak: "break-all"
+                      }}>
+                        💬 {displayComment}
                       </div>
                     )}
-                    <div style={{ marginTop: "12px" }}>
-                      <span className="card-label">可能なゲーム</span>
-                      <div style={{ marginTop: "4px", display: "flex", flexWrap: "wrap", gap: "4px" }}>
-                        {suggestion.gameOptions.map((game, gIdx) => (
-                          <button
-                            key={gIdx}
-                            type="button"
-                            onClick={() => setSelectedGame(game)}
-                            style={{
-                              padding: "4px 12px",
-                              borderRadius: "12px",
-                              border: selectedGame === game && selectedSuggestion === suggestion ? "2px solid #fbbf24" : "1px solid #4b5563",
-                              background: selectedGame === game && selectedSuggestion === suggestion ? "#fbbf24" : "#111827",
-                              color: selectedGame === game && selectedSuggestion === suggestion ? "#111827" : "#f9fafb",
-                              cursor: "pointer",
-                              fontSize: "12px",
-                            }}
-                          >
-                            {game}
-                          </button>
-                        ))}
+
+                    <div style={{ fontSize: "12px", color: "#888", marginBottom: "12px", marginTop: "10px" }}>
+                      <div>希望空き時間一覧:</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
+                        {u.availability?.map((av: any, i: number) => {
+                          const showTxt = av.end === "CUSTOM" ? av.start : `${av.start}-${av.end}`;
+                          return (
+                            <span key={i} style={{ background: "#111", padding: "2px 6px", border: "1px solid #222", color: "#fff" }}>
+                              {DAYS_OF_WEEK.find(d => d.value === av.day)?.label.slice(0,2) || av.day} {showTxt}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
-                    {selectedSuggestion === suggestion && selectedGame && (
-                      <button
-                        type="button"
-                        onClick={() => confirmMatch(suggestion, selectedGame)}
-                        disabled={loading}
-                        style={{
-                          marginTop: "12px",
-                          width: "100%",
-                          background: "#10b981",
-                          padding: "10px",
-                        }}
-                      >
-                        このマッチングを確定
-                      </button>
-                    )}
-                    {selectedSuggestion !== suggestion && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSuggestion(suggestion)}
-                        style={{
-                          marginTop: "12px",
-                          width: "100%",
-                          background: "#3b82f6",
-                          padding: "10px",
-                        }}
-                      >
-                        このマッチングを選択
-                      </button>
-                    )}
                   </div>
-                );
-              })}
+
+                  <div className="action-zone" style={{ marginTop: "auto" }}>
+                    <div className="action-title">参戦するゲームタイトルを選択:</div>
+                    <div className="direct-btn-group">
+                      {u.games?.map((game: string) => (
+                        <button
+                          key={game}
+                          className="btn-direct-confirm"
+                          onClick={() => handleJoinLobbyUser(u, game, u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
+                        >
+                          {game} で対戦に参加
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {suggestions.length > 0 && (
+          <div style={{ marginTop: "32px", borderTop: "2px dashed #ff007f", paddingTop: "24px" }}>
+            <h3>アルゴリズム自動マッチング提案</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "16px", marginTop: "12px" }}>
+              {suggestions.map((sug, index) => (
+                <div key={index} className="suggestion-card">
+                  <div className="card-header-info">
+                    <span className="pink-tag">{DAYS_OF_WEEK.find(d => d.value === sug.slot.day)?.label || sug.slot.day}</span>
+                    <span className="white-tag">{sug.room?.name}</span>
+                  </div>
+                  <div className="pair-info">
+                    <div><span className="label">STUDENT:</span> {sug.student?.nickname?.split(" ")[0]}</div>
+                    <div><span className="label">PROFESSOR:</span> {sug.professor?.nickname?.split(" ")[0]}</div>
+                  </div>
+                  <div className="action-zone">
+                    <div className="direct-btn-group">
+                      {sug.sharedGames?.map(game => (
+                        <button key={game} className="btn-direct-confirm" onClick={() => handleDirectConfirm(sug, game)}>
+                          {game} で自動マッチ確定
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
       </section>
 
-      <section>
-        <h2>登録済みデータ</h2>
-        
-        <div>
-          <h3>ユーザー</h3>
-          {users.length === 0 ? (
-            <div className="empty-state">登録されたユーザーがありません</div>
-          ) : (
-            <div className="card-grid">
-              {users.map((user: any) => (
-                <div key={user.id} className="card">
-                  <div className="card-title">{user.nickname}</div>
-                  <div className="card-field">
-                    <span className="card-label">役割</span>
-                    <span className="card-value">
-                      <span className={`badge ${user.role === "professor" ? "badge-success" : "badge-info"}`}>
-                        {user.role === "professor" ? "教授" : "学生"}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="card-field">
-                    <span className="card-label">ID</span>
-                    <span className="card-value" style={{ fontSize: "12px" }}>{user.id}</span>
-                  </div>
-                  {user.games && user.games.length > 0 && (
-                    <div style={{ marginTop: "8px" }}>
-                      <span className="card-label">ゲーム</span>
-                      <div style={{ marginTop: "4px" }}>
-                        {user.games.map((game: string, idx: number) => (
-                          <span key={idx} className="badge badge-info">{game}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {user.availability && user.availability.length > 0 && (
-                    <div style={{ marginTop: "8px" }}>
-                      <span className="card-label">利用可能時間</span>
-                      {user.availability.map((slot: any, idx: number) => (
-                        <div key={idx} style={{ fontSize: "12px", color: "#9ca3af", marginTop: "4px" }}>
-                          {slot.day}: {slot.start} - {slot.end}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* 履歴・ログ表示 */}
+      <div style={{ textAlign: "center", marginTop: "40px" }}>
+        <button type="button" className="btn-secondary" style={{ fontSize: "12px", padding: "6px 16px" }} onClick={() => setShowDebug(!showDebug)}>
+          {showDebug ? "対戦履歴を非表示" : "対戦成立履歴・ログを表示"}
+        </button>
+      </div>
 
-        <div>
-          <h3>教室</h3>
-          {rooms.length === 0 ? (
-            <div className="empty-state">登録された教室がありません</div>
-          ) : (
-            <div className="card-grid">
-              {rooms.map((room: any) => (
-                <div key={room.id} className="card">
-                  <div className="card-title">{room.name}</div>
-                  <div className="card-field">
-                    <span className="card-label">建物</span>
-                    <span className="card-value">{room.building}</span>
-                  </div>
-                  <div className="card-field">
-                    <span className="card-label">定員</span>
-                    <span className="card-value">
-                      <span className="badge badge-warning">{room.capacity}人</span>
-                    </span>
-                  </div>
-                  <div className="card-field">
-                    <span className="card-label">ID</span>
-                    <span className="card-value" style={{ fontSize: "12px" }}>{room.id}</span>
-                  </div>
-                  {room.availableSlots && room.availableSlots.length > 0 && (
-                    <div style={{ marginTop: "8px" }}>
-                      <span className="card-label">利用可能時間</span>
-                      {room.availableSlots.map((slot: any, idx: number) => (
-                        <div key={idx} style={{ fontSize: "12px", color: "#9ca3af", marginTop: "4px" }}>
-                          {slot.day}: {slot.start} - {slot.end}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3>マッチ</h3>
-          {matches.length === 0 ? (
-            <div className="empty-state">マッチングレコードがありません</div>
-          ) : (
-            <div className="table-responsive">
-              <table>
-                <thead>
-                  <tr>
-                    <th>学生</th>
-                    <th>教授</th>
-                    <th>教室</th>
-                    <th>ゲーム</th>
-                    <th>作成日</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {matches.map((match: any) => (
-                    <tr key={match.id}>
-                      <td>{match.student?.nickname || match.studentId}</td>
-                      <td>{match.professor?.nickname || match.professorId}</td>
-                      <td>{match.room?.name || match.roomId || "-"}</td>
-                      <td>{match.matchedGame || "-"}</td>
-                      <td>{new Date(match.createdAt).toLocaleDateString("ja-JP")}</td>
+      {showDebug && (
+        <section style={{ marginTop: "16px", borderColor: "#222" }}>
+          <h2>MATCH HISTORY & DATABASE LOG</h2>
+          <div style={{ marginBottom: "20px" }}>
+            <h3>成立した対戦マッチ一覧</h3>
+            {matches.length === 0 ? <p className="muted">履歴はありません</p> : (
+              <div className="table-responsive">
+                <table className="grid-table" style={{ background: "transparent" }}>
+                  <thead>
+                    <tr>
+                      <th>ホスト</th>
+                      <th>参戦プレイヤー</th>
+                      <th>場所</th>
+                      <th>対戦種目</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
+                  </thead>
+                  <tbody>
+                    {matches.map((m: any) => (
+                      <tr key={m.id}>
+                        <td>{m.student?.nickname?.split(" ")[0] || m.studentId}</td>
+                        <td>{m.professor?.nickname?.split(" ")[0] || m.professorId}</td>
+                        <td>{m.room?.name || "確定場所"}</td>
+                        <td style={{ color: "#ff007f" }}>{m.matchedGame}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
