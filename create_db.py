@@ -1,18 +1,24 @@
 import sqlite3
+
 def create_database():
     conn = sqlite3.connect("maomao.db")
     cur = conn.cursor()
-    # users (学生情報 - 教室名、期限管理用の列を追加)
+    
+    # users (学生情報 - プレーンなニックネームと追加列を整理)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nickname TEXT UNIQUE NOT NULL,
-        room_name TEXT,            -- ホストが選んだ教室名（ゲスト登録時は NULL）
-        match_type TEXT,           -- マッチ時間タイプ ("immediate" または "tomorrow")
+        nickname TEXT NOT NULL,      -- プレーンなニックネーム（一意制約は解除）
+        room_name TEXT,                     -- ホストが選んだ教室名（ゲスト登録時は NULL）
+        match_type TEXT,                    -- マッチ時間タイプ ("immediate" または "tomorrow")
+        capacity INTEGER DEFAULT 4,         -- 募集定員数
+        comment TEXT,                       -- 一言コメント
+        sns_contact TEXT,                   -- 連絡用SNS
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        expire_at DATETIME NOT NULL -- 有効期限 (タイムスタンプ)
+        expire_at DATETIME NOT NULL         -- 有効期限 (タイムスタンプ)
     )
     """)
+    
     # user_hobbies (趣味タグ)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS user_hobbies (
@@ -21,6 +27,7 @@ def create_database():
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     """)
+    
     # user_free_times (空きコマ)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS user_free_times (
@@ -30,6 +37,7 @@ def create_database():
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     """)
+    
     # rooms (予備用教室マスタ)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS rooms (
@@ -39,6 +47,7 @@ def create_database():
         period INTEGER NOT NULL
     )
     """)
+    
     # events (イベント情報)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS events (
@@ -49,6 +58,7 @@ def create_database():
         room_name TEXT NOT NULL
     )
     """)
+    
     # event_members (イベント参加者)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS event_members (
@@ -59,8 +69,22 @@ def create_database():
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     """)
+    
+    # chat_messages (イベントごとの伝言板メッセージ)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id INTEGER NOT NULL,
+        sender_name TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
+    )
+    """)
+    
     conn.commit()
     conn.close()
-    print("Database tables created successfully with matching expiration and room support.")
+    print("Database tables created successfully with matching expiration, room, and chat support.")
+
 if __name__ == "__main__":
     create_database()

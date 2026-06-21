@@ -2,18 +2,7 @@ import sqlite3
 import re
 from datetime import datetime
 from db import get_connection
-def parse_location_from_nickname(nickname):
-    """ニックネームから開催場所を取得するヘルパー"""
-    match = re.search(r'\(@([^)]+)\)', nickname)
-    if match:
-        return match.group(1).strip()
-    return None
-def parse_capacity_from_nickname(nickname):
-    """ニックネームから募集人数を取得するヘルパー"""
-    match = re.search(r'\[CAPA:(\d+)\]', nickname)
-    if match:
-        return int(match.group(1))
-    return 2  # デフォルトは最少の2人
+
 def execute_matching():
     conn = get_connection()
     cur = conn.cursor()
@@ -30,9 +19,10 @@ def execute_matching():
             cur.execute(f"DELETE FROM users WHERE id IN ({placeholders})", expired_ids)
             conn.commit()
             print(f"【クリーンアップ】期限切れの待機データ {len(expired_ids)}件 を自動削除しました。")
-        # 2. 未マッチングかつ有効期限内のユーザー一覧を取得
+            
+        # 2. 未マッチングかつ有効期限内のユーザー一覧を取得 (capacity カラムを取得)
         cur.execute("""
-            SELECT u.id, u.nickname, u.room_name 
+            SELECT u.id, u.nickname, u.room_name, u.capacity 
             FROM users u
             WHERE u.id NOT IN (
                 SELECT user_id FROM event_members
@@ -43,9 +33,9 @@ def execute_matching():
         hosts = []         # 部屋を立てたい人（ホスト）
         participants = []  # 部屋に入りたい人（参加者）
         
-        for uid, nickname, room_name in active_users:
+        for uid, nickname, room_name, capacity in active_users:
             if room_name:
-                hosts.append({"id": uid, "nickname": nickname, "room_name": room_name})
+                hosts.append({"id": uid, "nickname": nickname, "room_name": room_name, "capacity": capacity})
             else:
                 participants.append({"id": uid, "nickname": nickname})
                 
@@ -57,8 +47,8 @@ def execute_matching():
             room_name = host["room_name"]
             host_nickname = host["nickname"]
             
-            # 定員数を取得し、必要なゲスト数を算出
-            capacity = parse_capacity_from_nickname(host_nickname)
+            # 定員数をデータベースのカラムから直接取得し、必要な参加者数を算出
+            capacity = host.get("capacity", 4)
             required_guests = capacity - 1
             
             # ホストの趣味・空きコマを取得
@@ -72,6 +62,7 @@ def execute_matching():
             matched_hobby = None
             matched_day = None
             matched_period = None
+            current_matched = []
             
             # 条件に合致する参加者を探索
             for hobby in host_hobbies:
