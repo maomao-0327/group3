@@ -2,11 +2,15 @@ import sqlite3
 def create_database():
     conn = sqlite3.connect("maomao.db")
     cur = conn.cursor()
-    # users (学生情報)
+    # users (学生情報 - 教室名、期限管理用の列を追加)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nickname TEXT UNIQUE NOT NULL
+        nickname TEXT UNIQUE NOT NULL,
+        room_name TEXT,            -- ホストが選んだ教室名（ゲスト登録時は NULL）
+        match_type TEXT,           -- マッチ時間タイプ ("immediate" または "tomorrow")
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expire_at DATETIME NOT NULL -- 有効期限 (タイムスタンプ)
     )
     """)
     # user_hobbies (趣味タグ)
@@ -26,7 +30,7 @@ def create_database():
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     """)
-    # rooms (教室情報)
+    # rooms (予備用教室マスタ)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS rooms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +61,6 @@ def create_database():
     """)
     conn.commit()
     conn.close()
-    print("Database tables created successfully with foreign key constraints.")
+    print("Database tables created successfully with matching expiration and room support.")
 if __name__ == "__main__":
     create_database()
-

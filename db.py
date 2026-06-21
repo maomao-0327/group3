@@ -1,20 +1,20 @@
 import sqlite3
-# 同一ディレクトリの maomao.db を使用
+from datetime import datetime
 DB_NAME = "maomao.db"
 def get_connection():
     conn = sqlite3.connect(DB_NAME)
-    # SQLiteで外部キー制約を有効化
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 # ------------------
 # Users
 # ------------------
-def add_user(nickname):
+def add_user(nickname, room_name=None, match_type='immediate', expire_at=None):
+    """ユーザー登録（選んだ教室名と有効期限を明示的に格納）"""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users (nickname) VALUES (?)",
-        (nickname,)
+        "INSERT INTO users (nickname, room_name, match_type, expire_at) VALUES (?, ?, ?, ?)",
+        (nickname, room_name, match_type, expire_at)
     )
     user_id = cur.lastrowid
     conn.commit()
@@ -35,51 +35,69 @@ def get_user_id(nickname):
     conn.close()
     return row[0] if row else None
 # ------------------
-# Hobbies
+# Hobbies & Free Times
 # ------------------
 def add_hobby(user_id, hobby):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO user_hobbies (user_id, hobby) VALUES (?, ?)",
-        (user_id, hobby)
-    )
+    cur.execute("INSERT INTO user_hobbies (user_id, hobby) VALUES (?, ?)", (user_id, hobby))
     conn.commit()
     conn.close()
-# ------------------
-# Free Times
-# ------------------
 def add_free_time(user_id, day, period):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO user_free_times (user_id, day, period) VALUES (?, ?, ?)",
-        (user_id, day, period)
-    )
+    cur.execute("INSERT INTO user_free_times (user_id, day, period) VALUES (?, ?, ?)", (user_id, day, period))
     conn.commit()
     conn.close()
 # ------------------
-# UI用一括取得関数群 (Reactの型に合わせた変換)
+# 重複教室チェック
+# ------------------
+def check_classroom_booking(room_name, day, period):
+    """
+    指定された曜日・時限で、選んだ教室がすでに使用中か判定する
+    1. すでにマッチが成立したイベントで使用されているか
+    2. まだマッチしていない有効期限内の他のホストがすでに登録しているか
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 1. マッチ成立イベントのチェック
+    cur.execute("""
+        SELECT 1 FROM events 
+        WHERE room_name = ? AND day = ? AND period = ?
+    """, (room_name, day, period))
+    if cur.fetchone():
+        conn.close()
+        return True
+        
+    # 2. 待機中ホスト（期限内の部屋）のチェック
+    cur.execute("""
+        SELECT 1 FROM users u
+        JOIN user_free_times f ON u.id = f.user_id
+        WHERE u.room_name = ? AND f.day = ? AND f.period = ? AND u.expire_at > ?
+    """, (room_name, day, period, now_str))
+    is_booked = cur.fetchone() is not None
+    conn.close()
+    return is_booked
+# ------------------
+# UI用一括取得関数群
 # ------------------
 def get_all_users_details():
-    """React UIの LOBBY BOARD 表示用に、全ユーザーの趣味と空き時間を一括取得して整形"""
     conn = get_connection()
     cur = conn.cursor()
     
-    cur.execute("SELECT id, nickname FROM users")
+    cur.execute("SELECT id, nickname, room_name, expire_at FROM users")
     users_rows = cur.fetchall()
     
     users_list = []
-    for uid, nickname in users_rows:
-        # 趣味（games）
+    for uid, nickname, room_name, expire_at in users_rows:
         cur.execute("SELECT hobby FROM user_hobbies WHERE user_id = ?", (uid,))
         games = [row[0] for row in cur.fetchall()]
         
-        # 空き時間（availability）
         cur.execute("SELECT day, period FROM user_free_times WHERE user_id = ?", (uid,))
         free_times_rows = cur.fetchall()
         
-        # DBの時限(1-7)から、フロントの時間帯文字列への逆変換マッピング
         PERIOD_TO_TIME = {
             1: {"start": "08:40", "end": "09:55"},
             2: {"start": "10:10", "end": "11:25"},
@@ -100,8 +118,10 @@ def get_all_users_details():
             })
             
         users_list.append({
-            "id": str(uid),  # フロント側が string ID を期待している可能性があるため文字列化
+            "id": str(uid),
             "nickname": nickname,
+            "room_name": room_name,
+            "expire_at": expire_at,
             "games": games,
             "availability": availability
         })
@@ -109,7 +129,6 @@ def get_all_users_details():
     conn.close()
     return users_list
 def get_all_matches_details():
-    """React UIの履歴表示用に、マッチしたイベントと参加者情報を整形して取得"""
     conn = get_connection()
     cur = conn.cursor()
     
@@ -118,7 +137,6 @@ def get_all_matches_details():
     
     matches_list = []
     for eid, hobby, room_name in event_rows:
-        # 参加者のニックネーム一覧を取得
         cur.execute("""
             SELECT u.nickname 
             FROM event_members em
@@ -128,8 +146,6 @@ def get_all_matches_details():
         member_nicknames = [row[0] for row in cur.fetchall()]
         
         if len(member_nicknames) > 0:
-            # 2人以上の対戦履歴を表示するためのマッピング
-            # React UIが m.student.nickname と m.professor.nickname を参照するため
             student_name = member_nicknames[0]
             professor_name = member_nicknames[1] if len(member_nicknames) > 1 else "無し"
             
@@ -169,9 +185,6 @@ def get_event_members_with_name(event_id):
     members = cur.fetchall()
     conn.close()
     return members
-# ------------------
-# Reset Data
-# ------------------
 def reset_all_data():
     conn = get_connection()
     cur = conn.cursor()
