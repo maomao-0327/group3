@@ -1,7 +1,8 @@
 import sqlite3
+import db
 
 def create_database():
-    conn = sqlite3.connect("maomao.db")
+    conn = sqlite3.connect(db.DB_NAME)
     cur = conn.cursor()
     
     # users (学生情報 - プレーンなニックネームと追加列を整理)
@@ -55,7 +56,9 @@ def create_database():
         hobby TEXT NOT NULL,
         day TEXT NOT NULL,
         period INTEGER NOT NULL,
-        room_name TEXT NOT NULL
+        room_name TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        custom_time TEXT
     )
     """)
     

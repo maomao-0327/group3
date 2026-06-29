@@ -101,9 +101,9 @@ def execute_matching():
             # 定員が満たされたらマッチを確定し、イベントを生成
             if len(matched_participants) >= required_guests:
                 cur.execute("""
-                    INSERT INTO events (hobby, day, period, room_name)
-                    VALUES (?, ?, ?, ?)
-                """, (matched_hobby, matched_day, matched_period, room_name))
+                    INSERT INTO events (hobby, day, period, room_name, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (matched_hobby, matched_day, matched_period, room_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
                 event_id = cur.lastrowid
                 
                 # ホストのイベント登録

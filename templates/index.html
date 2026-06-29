@@ -205,8 +205,8 @@
       font-weight: bold;
       letter-spacing: 1px;
     }
-    .tag-chip {
-      background: #111;
+    button.tag-chip {
+      background-color: #111;
       border: 1px solid var(--border-color);
       color: #ccc;
       padding: 6px 14px;
@@ -216,16 +216,25 @@
       margin-right: 8px;
       margin-bottom: 8px;
       transition: all 0.2s;
+      box-shadow: none;
+      text-transform: none;
     }
-    .tag-chip:hover {
+    button.tag-chip:hover {
+      background-color: #222;
       border-color: #888;
       color: #fff;
+      box-shadow: none;
     }
-    .tag-chip.active {
-      background: var(--accent-pink);
+    button.tag-chip.active {
+      background-color: var(--accent-pink);
       border-color: var(--accent-pink);
       color: #fff;
       box-shadow: 0 0 10px rgba(255, 0, 127, 0.4);
+    }
+    button.tag-chip.active:hover {
+      background-color: #e00070;
+      border-color: var(--accent-pink);
+      box-shadow: 0 0 15px rgba(255, 0, 127, 0.6);
     }
     /* 掲示板カード */
     .suggestion-card {
@@ -397,6 +406,118 @@
     .grid-table td {
       font-size: 0.9rem;
     }
+    
+    /* 静的ネオンデザイン (アニメーションは動きを抑制するため排除) */
+    
+    .toast-neon-match {
+      background: #ff007f !important;
+      color: #fff !important;
+      box-shadow: 0 0 15px #ff007f, 0 0 30px #00ffff !important;
+      font-weight: 900 !important;
+      font-size: 1.1rem !important;
+      letter-spacing: 1px !important;
+      border: 2px solid #fff !important;
+      padding: 16px 24px !important;
+    }
+    
+    .match-confirmed-alert {
+      border: 3px solid var(--accent-pink);
+      background: #0d0d0d;
+      padding: 30px;
+      margin-bottom: 30px;
+      text-align: center;
+      border-radius: 4px;
+      box-shadow: 0 0 20px var(--accent-pink), 0 10px 30px rgba(0,0,0,0.7);
+    }
+    .match-confirmed-alert h2 {
+      color: var(--accent-pink);
+      font-size: 2rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      margin-top: 0;
+      border-left: none;
+      padding-left: 0;
+      text-shadow: 0 0 10px var(--accent-pink);
+    }
+    .btn-enter-room {
+      background: transparent;
+      border: 2px solid var(--accent-cyan);
+      color: var(--accent-cyan);
+      padding: 16px 36px;
+      font-size: 1.2rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      font-weight: 900;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: all 0.3s ease;
+      text-shadow: 0 0 5px var(--accent-cyan);
+      box-shadow: 0 0 15px var(--accent-cyan);
+      border-radius: 4px;
+    }
+    .btn-enter-room:hover {
+      background: var(--accent-cyan);
+      color: #000 !important;
+      box-shadow: 0 0 25px var(--accent-cyan);
+      text-shadow: none;
+    }
+    
+    /* VS Layout Styles */
+    .vs-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      margin: 30px 0;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+    .vs-fighter-card {
+      flex: 1;
+      min-width: 280px;
+      background: #000;
+      border: 1px solid var(--border-color);
+      padding: 24px;
+      border-radius: 4px;
+      position: relative;
+      overflow: hidden;
+      min-height: 150px;
+    }
+    .vs-fighter-card.host {
+      border-left: 5px solid var(--accent-pink);
+      box-shadow: 0 0 15px rgba(255, 0, 127, 0.15);
+      animation: neon-pulse-pink 2s infinite alternate;
+    }
+    .vs-fighter-card.guests {
+      border-right: 5px solid var(--accent-cyan);
+      box-shadow: 0 0 15px rgba(0, 255, 255, 0.15);
+      animation: neon-pulse-cyan 2s infinite alternate;
+    }
+    .vs-badge {
+      font-size: 4rem;
+      font-weight: 900;
+      font-style: italic;
+      color: #fff;
+      text-shadow: 0 0 10px var(--accent-pink), 0 0 20px var(--accent-cyan);
+      animation: blink-text 1.5s infinite;
+      letter-spacing: 2px;
+      user-select: none;
+    }
+    
+    /* マッチ成立ルーム（eventビュー）を少し明るくするスタイル */
+    body.event-view-active {
+      background-color: #141419; /* 元の #050505 より少し明るく */
+      transition: background-color 0.4s ease;
+    }
+    .app.event-view-active section {
+      background-color: #1a1a22; /* 元の #0d0d0d より少し明るく */
+      border-color: #333344;
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+    }
+    .app.event-view-active .event-card {
+      background-color: #24242e; /* カードの背景トーンアップ */
+      border-color: #444455;
+    }
   </style>
 </head>
 <body>
@@ -495,9 +616,24 @@
           throw new Error(err.error || "合流に失敗しました");
         }
         return res.json();
+      },
+      async deleteUser(userId) {
+        const res = await fetch(`${BASE_URL}/api/users/${userId}`, {
+          method: "DELETE"
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || "退室に失敗しました");
+        }
+        return res.json();
       }
     };
     function App() {
+      const getCapacity = (event) => {
+        if (!event || event.capacity === undefined || event.capacity === null) return 4;
+        const val = Number(event.capacity);
+        return isNaN(val) ? 4 : val;
+      };
       const [users, setUsers] = useState([]);
       const [matches, setMatches] = useState([]);
       const [statusMessage, setStatusMessage] = useState("");
@@ -508,6 +644,7 @@
       const [chatMessages, setChatMessages] = useState([]);
       const [chatInput, setChatInput] = useState("");
       const [toasts, setToasts] = useState([]);
+      const [showMatchNotification, setShowMatchNotification] = useState(false);
       const [filterGameSearch, setFilterGameSearch] = useState("");
       const [filterDay, setFilterDay] = useState("ALL");
       const [filterImmediateOnly, setFilterImmediateOnly] = useState(false);
@@ -515,14 +652,6 @@
       
       const [myUserId, setMyUserId] = useState(() => {
         return localStorage.getItem("fight_club_my_user_id") || null;
-      });
-      const [deletedIds, setDeletedIds] = useState(() => {
-        try {
-          const saved = localStorage.getItem("fight_club_deleted_ids");
-          return saved ? JSON.parse(saved) : [];
-        } catch (e) {
-          return [];
-        }
       });
       const [registerType, setRegisterType] = useState("host");
       const [userForm, setUserForm] = useState({
@@ -542,25 +671,30 @@
       const [joiningHostInfo, setJoiningHostInfo] = useState(null);
       const [guestForm, setGuestForm] = useState({
         nickname: "",
-        comment: ""
+        comment: "",
+        snsContact: ""
       });
       useEffect(() => {
         const savedNickname = localStorage.getItem("fight_club_preset_nickname") || "";
         const savedLocation = localStorage.getItem("fight_club_preset_location") || "7A101";
+        const savedSns = localStorage.getItem("fight_club_preset_sns") || "";
         setUserForm(prev => ({
           ...prev,
           nickname: savedNickname,
-          customLocation: savedLocation
+          customLocation: savedLocation,
+          snsContact: savedSns
         }));
         setGuestForm(prev => ({
           ...prev,
-          nickname: savedNickname
+          nickname: savedNickname,
+          snsContact: savedSns
         }));
       }, []);
       useEffect(() => {
         localStorage.setItem("fight_club_preset_nickname", userForm.nickname);
         localStorage.setItem("fight_club_preset_location", userForm.customLocation);
-      }, [userForm.nickname, userForm.customLocation]);
+        localStorage.setItem("fight_club_preset_sns", userForm.snsContact || guestForm.snsContact);
+      }, [userForm.nickname, userForm.customLocation, userForm.snsContact, guestForm.snsContact]);
       const addToast = (message, type = "success") => {
         const id = Date.now() + Math.random();
         setToasts((prev) => [...prev, { id, message, type }]);
@@ -596,6 +730,18 @@
         const checkMyStatus = async () => {
           try {
             const status = await api.checkStatus(myUserId);
+            
+            if (status.exists === false && isMounted) {
+              setMyUserId(null);
+              localStorage.removeItem("fight_club_my_user_id");
+              setActiveEvent(null);
+              setShowMatchNotification(false);
+              setStatusMessage("");
+              setView("dashboard");
+              addToast("セッションが終了したか、部屋が削除されました。", "info");
+              return;
+            }
+            
             if (status.is_matched && isMounted) {
               setActiveEvent({
                 id: status.event_id,
@@ -603,9 +749,37 @@
                 matched_game: status.matched_game,
                 day: status.day,
                 period: status.period,
-                members: status.members
+                members: status.members,
+                capacity: status.capacity
               });
-              setView("event");
+              
+              const isFull = status.members.length >= status.capacity;
+              
+              setView((prevView) => {
+                if (prevView !== "event") {
+                  if (isFull) {
+                    setShowMatchNotification((prevNotified) => {
+                      if (!prevNotified) {
+                        addToast("マッチングが成立しました。", "success");
+                        return true;
+                      }
+                      return prevNotified;
+                    });
+                  }
+                }
+                return prevView;
+              });
+            } else if (isMounted) {
+              setActiveEvent(null);
+              setShowMatchNotification(false);
+              setStatusMessage("");
+              setView((prevView) => {
+                if (prevView === "event") {
+                  addToast("部屋が解散されたか、退出しました。", "info");
+                  return "dashboard";
+                }
+                return prevView;
+              });
             }
           } catch (e) {
             console.error("ステータス確認エラー:", e);
@@ -618,6 +792,15 @@
           clearInterval(statusTimer);
         };
       }, [myUserId]);
+      
+      useEffect(() => {
+        if (view === "event") {
+          document.body.classList.add("event-view-active");
+        } else {
+          document.body.classList.remove("event-view-active");
+        }
+      }, [view]);
+
       // マッチ確定時のチャットポーリング処理
       useEffect(() => {
         if (view !== "event" || !activeEvent?.id) return;
@@ -676,32 +859,48 @@
         const nextList = userForm.availability.filter((_, i) => i !== index);
         setUserForm({ ...userForm, availability: nextList });
       };
-      const handleToggleTag = (tag) => {
-        const isSelected = userForm.games.includes(tag);
-        const nextGames = isSelected
-          ? userForm.games.filter((g) => g !== tag)
-          : [...userForm.games, tag];
-        setUserForm({ ...userForm, games: nextGames });
+      const handleToggleTag = (e, tag) => {
+        if (e && e.currentTarget) {
+          e.currentTarget.blur();
+        }
+        setUserForm(prev => {
+          const isSelected = prev.games.includes(tag);
+          const nextGames = isSelected
+            ? prev.games.filter((g) => g !== tag)
+            : [...prev.games, tag];
+          return { ...prev, games: Array.from(new Set(nextGames)) };
+        });
       };
       const handleAddCustomTag = () => {
         const trimmed = otherTagInput.trim();
         if (!trimmed) return;
-        if (!userForm.games.includes(trimmed)) {
-          setUserForm({ ...userForm, games: [...userForm.games, trimmed] });
-          setOtherTagInput("");
-        }
+        setUserForm(prev => {
+          if (prev.games.includes(trimmed)) return prev;
+          return { ...prev, games: [...prev.games, trimmed] };
+        });
+        setOtherTagInput("");
       };
-      const handleDeleteUser = (id) => {
-        if (!confirm("このエントリー募集を取り消しますか？")) return;
-        const nextDeletedIds = [...deletedIds, id];
-        setDeletedIds(nextDeletedIds);
-        localStorage.setItem("fight_club_deleted_ids", JSON.stringify(nextDeletedIds));
-        
-        if (id === myUserId) {
-          setMyUserId(null);
-          localStorage.removeItem("fight_club_my_user_id");
+      const handleDeleteUser = async (id) => {
+        if (!confirm("このエントリー募集を取り消しますか？（部屋から完全に退室します）")) return;
+        setLoading(true);
+        try {
+          await api.deleteUser(id);
+          
+          if (id.toString() === myUserId?.toString()) {
+            setMyUserId(null);
+            localStorage.removeItem("fight_club_my_user_id");
+            setActiveEvent(null);
+            setShowMatchNotification(false);
+            setStatusMessage("");
+            setView("dashboard");
+          }
+          addToast("退室/募集削除が完了しました", "success");
+          await refreshAll();
+        } catch (e) {
+          addToast("退室処理に失敗しました: " + e.message, "error");
+        } finally {
+          setLoading(false);
         }
-        addToast("募集エントリーを取り消しました", "success");
       };
       const onUserSubmit = async (event) => {
         event.preventDefault();
@@ -796,6 +995,7 @@
             host_user_id: parseInt(joiningHostInfo.hostUser.id),
             nickname: nickname,
             comment: guestForm.comment.trim(),
+            sns_contact: guestForm.snsContact.trim(),
             game: joiningHostInfo.game,
             day: joiningHostInfo.slot.day,
             start: joiningHostInfo.slot.start
@@ -814,7 +1014,8 @@
             matched_game: res.matched_game,
             day: res.day,
             period: res.period,
-            members: res.members
+            members: res.members,
+            capacity: res.capacity
           });
           
           setActiveModal("none");
@@ -832,7 +1033,7 @@
         const currentDayValue = daysMap[now.getDay()]; 
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
         return users
-          .filter((u) => !deletedIds.includes(u.id))
+          .filter((u) => u.id.toString() !== myUserId?.toString())
           .filter((u) => {
             if (filterGameSearch.trim() !== "") {
               const searchLower = filterGameSearch.toLowerCase().trim();
@@ -852,17 +1053,37 @@
             }
             return true;
           });
-      }, [users, deletedIds, filterGameSearch, filterDay, filterImmediateOnly]);
+      }, [users, myUserId, filterGameSearch, filterDay, filterImmediateOnly]);
       if (view === "event") {
+        const isMatchedConfirmed = activeEvent && activeEvent.members && activeEvent.members.length >= getCapacity(activeEvent);
         return (
-          <div className="app">
-            <header>
+          <div className="app event-view-active">
+            <header style={{ position: "relative" }}>
               <h1>FIGHT CLUB</h1>
-              <p className="subtitle">MATCH SETTLED</p>
+              <p className="subtitle">
+                {isMatchedConfirmed ? "MATCH SETTLED" : "WAITING FOR PLAYERS"}
+                {activeEvent && ` (${activeEvent.members?.length} / ${getCapacity(activeEvent)}名)`}
+              </p>
             </header>
-            <section style={{ borderColor: "#ff007f" }}>
+            <section style={{ borderColor: isMatchedConfirmed ? "var(--accent-pink)" : "var(--accent-cyan)" }}>
               <div style={{ textAlign: "center", marginBottom: "32px" }}>
-                <h2 style={{ color: "#ff007f", border: "none", padding: 0, fontSize: "2rem" }}>MATCH CONFIRMED</h2>
+                <h2 style={{ 
+                  color: "#fff", 
+                  border: "none", 
+                  padding: "10px 24px", 
+                  fontSize: "2.5rem", 
+                  fontWeight: "900", 
+                  letterSpacing: "4px", 
+                  textTransform: "uppercase",
+                  textShadow: isMatchedConfirmed 
+                    ? "0 0 10px var(--accent-pink), 0 0 20px rgba(255, 0, 127, 0.6)"
+                    : "0 0 10px var(--accent-cyan), 0 0 20px rgba(0, 255, 255, 0.6)",
+                  borderTop: isMatchedConfirmed ? "2px solid var(--accent-pink)" : "2px solid var(--accent-cyan)",
+                  borderBottom: isMatchedConfirmed ? "2px solid var(--accent-pink)" : "2px solid var(--accent-cyan)",
+                  display: "inline-block"
+                }}>
+                  {isMatchedConfirmed ? "MATCH CONFIRMED" : "RECRUITING MEMBERS"}
+                </h2>
               </div>
               <div className="event-grid">
                 <div className="event-card">
@@ -880,12 +1101,12 @@
               <div className="event-grid" style={{ marginTop: "16px" }}>
                 <div className="event-card">
                   <h3>SELECTED TITLE</h3>
-                  <p className="highlight" style={{ color: "#ff007f" }}>{activeEvent?.matched_game || "GAME"}</p>
+                  <p className="highlight" style={{ color: isMatchedConfirmed ? "var(--accent-pink)" : "var(--accent-cyan)" }}>{activeEvent?.matched_game || "GAME"}</p>
                 </div>
-                <div className="event-card" style={{ border: "1px dashed #ff007f" }}>
+                <div className="event-card" style={{ border: isMatchedConfirmed ? "1px dashed var(--accent-pink)" : "1px dashed var(--accent-cyan)" }}>
                   <h3>HOST CONTACT ID (SNS)</h3>
                   <p className="highlight" style={{ color: "#00ffff", fontSize: "1.2rem" }}>
-                    {(activeEvent?.members || []).map(m => `${m.nickname}: [${m.sns_contact || '未登録'}]`).join(' | ')}
+                    {(activeEvent?.members || []).filter(m => m.sns_contact).map(m => `${m.nickname}: [${m.sns_contact}]`).join(' | ') || '登録なし'}
                   </p>
                 </div>
               </div>
@@ -926,13 +1147,30 @@
                 </form>
               </div>
      
-              <div style={{ textAlign: "center", marginTop: "32px" }}>
-                <button onClick={() => { 
-                  setView("dashboard"); 
-                  setMyUserId(null); 
-                  localStorage.removeItem("fight_club_my_user_id");
-                  refreshAll(); 
-                }}>ロビー掲示板に戻る (退出)</button>
+              <div style={{ textAlign: "center", marginTop: "32px", display: "flex", justifyContent: "center", gap: "16px", flexWrap: "wrap" }}>
+                <button 
+                  className="btn-secondary" 
+                  onClick={() => { 
+                    setView("dashboard"); 
+                    refreshAll(); 
+                  }}
+                >
+                  ロビーに戻る (一時退出)
+                </button>
+                {myUserId && (() => {
+                  const myMember = activeEvent?.members?.find(m => m.id.toString() === myUserId.toString());
+                  const isHost = myMember && myMember.room_name !== null && myMember.room_name !== undefined;
+                  return (
+                    <button 
+                      style={{ background: "#cc0000", border: "1px solid #ff3333" }}
+                      onClick={() => { 
+                        handleDeleteUser(myUserId);
+                      }}
+                    >
+                      {isHost ? "部屋を削除して解散 (エントリー削除)" : "部屋から完全に退出 (入室状況を削除)"}
+                    </button>
+                  );
+                })()}
               </div>
             </section>
           </div>
@@ -942,20 +1180,92 @@
         <div className="app">
           <div className="toast-container">
             {toasts.map((t) => (
-              <div key={t.id} className="toast" style={{
-                background: t.type === "success" ? "#ff007f" : t.type === "error" ? "#ff3333" : "#ffffff",
-                color: t.type === "info" ? "#000000" : "#ffffff",
-                border: "1px solid rgba(255,255,255,0.2)"
-              }}>
+              <div 
+                key={t.id} 
+                className={`toast ${t.type === "neon-match" ? "toast-neon-match" : ""}`}
+                style={t.type !== "neon-match" ? {
+                  background: t.type === "success" ? "#ff007f" : t.type === "error" ? "#ff3333" : "#ffffff",
+                  color: t.type === "info" ? "#000000" : "#ffffff",
+                  border: "1px solid rgba(255,255,255,0.2)"
+                } : {}}
+              >
                 {t.message}
               </div>
             ))}
           </div>
-          <header>
+          <header style={{ position: "relative" }}>
             <h1>F I G H T・C L U B</h1>
             <p className="subtitle">P2P CLASSROOM MATCHING SYSTEM</p>
           </header>
-          {statusMessage && <div className="status-banner">{statusMessage}</div>}
+          {activeEvent && activeEvent.members && activeEvent.members.length >= getCapacity(activeEvent) ? (
+            <div className="match-confirmed-alert">
+              <h2>MATCH CONFIRMED</h2>
+              <p style={{ fontSize: "1.1rem", margin: "10px 0", color: "#ccc", fontWeight: "bold" }}>
+                対戦メンバーが揃いました！（マッチング成立）
+              </p>
+              <div style={{ fontSize: "0.95rem", color: "var(--accent-cyan)", marginBottom: "20px", fontWeight: "bold" }}>
+                場所: {activeEvent.room_name} | 種目: {activeEvent.matched_game} | メンバー数: {activeEvent.members.length}/{getCapacity(activeEvent)}名
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", gap: "16px", flexWrap: "wrap" }}>
+                <button 
+                  className="btn-enter-room" 
+                  onClick={() => setView("event")}
+                >
+                  部屋に入る (ENTER)
+                </button>
+              </div>
+            </div>
+          ) : (
+            (statusMessage || activeEvent) && (
+              <div className="status-banner" style={{ background: "#005f73", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", flexWrap: "wrap", gap: "10px" }}>
+                <span style={{ fontWeight: "bold" }}>
+                  {statusMessage || "対戦メンバーの合流を待っています..."}
+                  {activeEvent && activeEvent.members && ` (現在のメンバー: ${activeEvent.members.length}/${getCapacity(activeEvent)}名)`}
+                </span>
+                <div style={{ display: "flex", gap: "12px" }}>
+                  {activeEvent && (
+                    <button 
+                      className="btn-secondary" 
+                      style={{ 
+                        background: "var(--accent-pink)", 
+                        color: "#fff", 
+                        border: "none", 
+                        padding: "8px 18px", 
+                        fontSize: "13px", 
+                        fontWeight: "900", 
+                        cursor: "pointer", 
+                        borderRadius: "2px",
+                        boxShadow: "0 0 10px rgba(255, 0, 127, 0.6)",
+                        letterSpacing: "1px"
+                      }}
+                      onClick={() => {
+                        setView("event");
+                      }}
+                    >
+                      部屋に入る (ENTER)
+                    </button>
+                  )}
+                  {myUserId && (
+                    <button 
+                      style={{ 
+                        background: "#cc0000", 
+                        border: "none", 
+                        color: "#fff",
+                        padding: "8px 18px", 
+                        fontSize: "13px", 
+                        fontWeight: "900", 
+                        cursor: "pointer", 
+                        borderRadius: "2px"
+                      }}
+                      onClick={() => handleDeleteUser(myUserId)}
+                    >
+                      募集取消/退出
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          )}
           <section>
             <h2>対戦・マッチの新規募集（登録）</h2>
             <form onSubmit={onUserSubmit}>
@@ -1075,7 +1385,7 @@
                         {group.tags.map((tag) => {
                           const isSelected = userForm.games.includes(tag);
                           return (
-                            <button key={tag} type="button" onClick={() => handleToggleTag(tag)} className={`tag-chip ${isSelected ? "active" : ""}`}>
+                            <button key={tag} type="button" onClick={(e) => handleToggleTag(e, tag)} className={`tag-chip ${isSelected ? "active" : ""}`}>
                               {tag}
                             </button>
                           );
@@ -1181,13 +1491,22 @@
                       required 
                     />
                   </div>
-                  <div style={{ marginBottom: "24px" }}>
+                  <div style={{ marginBottom: "16px" }}>
                     <label>一言コメント (任意)</label>
                     <input 
                       type="text" 
                       placeholder="例: よろしくお願いします！" 
                       value={guestForm.comment} 
                       onChange={(e) => setGuestForm({ ...guestForm, comment: e.target.value })} 
+                    />
+                  </div>
+                  <div style={{ marginBottom: "24px" }}>
+                    <label>連絡用SNS (任意 / マッチ成立時のみ開示)</label>
+                    <input 
+                      type="text" 
+                      placeholder="例: Discord ID, X ID" 
+                      value={guestForm.snsContact} 
+                      onChange={(e) => setGuestForm({ ...guestForm, snsContact: e.target.value })} 
                     />
                   </div>
                   <div style={{ display: "flex", gap: "12px" }}>
@@ -1203,9 +1522,6 @@
           <section style={{ border: "2px solid #ff007f" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
               <h2>LOBBY BOARD（公開募集ロビー一覧）</h2>
-              <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px", background: "#ff007f", color: "#fff" }} onClick={handleTriggerMatchingEngine}>
-                マッチング処理（部屋への割り当て）を実行
-              </button>
             </div>
             <div style={{ background: "#0d0d0d", border: "1px solid #222", padding: "16px", marginBottom: "20px", display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ flex: 2, minWidth: "180px" }}>
@@ -1246,7 +1562,7 @@
                 </div>
               </div>
               <div style={{ flex: 1, minWidth: "160px" }}>
-                <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>タイム枠ブースト</span>
+                <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>今すぐ遊べる部屋のみ表示</span>
                 <button
                   type="button"
                   onClick={() => {
@@ -1264,7 +1580,7 @@
                     textAlign: "center"
                   }}
                 >
-                  {filterImmediateOnly ? "ON: 今すぐ遊べる枠" : "OFF: 今すぐ遊べる枠"}
+                  {filterImmediateOnly ? "ON (有効)" : "OFF (無効)"}
                 </button>
               </div>
             </div>
@@ -1277,15 +1593,16 @@
                 {filteredAndVisibleUsers.map((u) => {
                   const isHost = u.room_name !== null && u.room_name !== undefined;
                   const displayLocation = u.room_name || "マッチ部屋へ自動割り当て";
+                  const canJoin = isHost && myUserId === null;
                   return (
-                    <div key={u.id} className="suggestion-card" style={{ borderColor: isHost ? "#ff007f" : "#333" }}>
+                    <div key={u.id} className="suggestion-card" style={{ borderColor: isHost ? "var(--accent-cyan)" : "#333", boxShadow: isHost ? "0 0 10px rgba(0, 255, 255, 0.15)" : "none" }}>
                       <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                           <div>
                             {isHost ? (
-                              <span className="white-tag" style={{ background: "#ff007f", color: "#fff", border: "none" }}>ROOM CREATOR (@{displayLocation})</span>
+                              <span className="white-tag" style={{ background: "var(--accent-cyan)", color: "#000", border: "none", fontWeight: "bold" }}>ROOM CREATOR (@{displayLocation})</span>
                             ) : (
-                              <span className="white-tag" style={{ background: "#00ffff", color: "#000", border: "none" }}>JOINER (探し中)</span>
+                              <span className="white-tag" style={{ background: "#222", color: "#aaa", border: "none" }}>JOINER (探し中)</span>
                             )}
                             <span className="white-tag" style={{ background: "#222", color: "#aaa", marginLeft: "6px", border: "none" }}>
                               {u.capacity}人募集
@@ -1296,10 +1613,17 @@
                         <div style={{ margin: "14px 0 4px 0", fontSize: "16px", fontWeight: "bold" }}>
                           USER: {u.nickname}
                         </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", margin: "8px 0" }}>
+                          {u.games?.map((game) => (
+                            <span key={game} className="badge" style={{ background: "rgba(0, 255, 255, 0.1)", border: "1px solid var(--accent-cyan)", color: "#fff", fontSize: "0.75rem", padding: "4px 8px" }}>
+                              {game}
+                            </span>
+                          ))}
+                        </div>
                         {u.comment && (
                           <div style={{
                             background: "#111",
-                            borderLeft: isHost ? "2px solid #ff007f" : "2px solid #00ffff",
+                            borderLeft: "2px solid var(--accent-cyan)",
                             padding: "6px 10px",
                             fontSize: "13px",
                             color: "#ddd",
@@ -1325,23 +1649,40 @@
                         </div>
                       </div>
                       <div className="action-zone" style={{ marginTop: "auto" }}>
-                        <div className="direct-btn-group">
-                          {u.games?.map((game) => (
-                            <button
-                              key={game}
-                              className="btn-direct-confirm"
-                              disabled={!isHost}
-                              style={{
-                                background: isHost ? "#ff007f" : "#222",
-                                cursor: isHost ? "pointer" : "not-allowed",
-                                opacity: isHost ? 1 : 0.4
-                              }}
-                              onClick={() => handleManualJoinLobbyUser(u, game, u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
-                            >
-                              {isHost ? `${game} 部屋に入る` : `${game} (探し中)`}
-                            </button>
-                          ))}
-                        </div>
+                        {isHost ? (
+                          <button
+                            className="btn-direct-confirm"
+                            disabled={!canJoin}
+                            style={{
+                              background: canJoin ? "var(--accent-cyan)" : "#222",
+                              color: canJoin ? "#000" : "#555",
+                              border: canJoin ? "none" : "1px solid #333",
+                              cursor: canJoin ? "pointer" : "not-allowed",
+                              opacity: canJoin ? 1 : 0.4,
+                              boxShadow: canJoin ? "0 0 10px rgba(0, 255, 255, 0.4)" : "none",
+                              fontWeight: canJoin ? "bold" : "normal",
+                              width: "100%",
+                              padding: "10px 0",
+                              fontSize: "14px",
+                              letterSpacing: "1px"
+                            }}
+                            onClick={() => handleManualJoinLobbyUser(u, u.games[0] || "", u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
+                          >
+                            部屋に入る (ENTER ROOM)
+                          </button>
+                        ) : (
+                          <div style={{
+                            textAlign: "center",
+                            fontSize: "12px",
+                            color: "var(--accent-cyan)",
+                            padding: "8px",
+                            border: "1px dashed rgba(0, 255, 255, 0.2)",
+                            background: "rgba(0, 255, 255, 0.02)",
+                            letterSpacing: "1px"
+                          }}>
+                            MATCHMAKING (対戦相手を探しています)
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

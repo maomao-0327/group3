@@ -8,6 +8,80 @@ def check_and_migrate_db():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     
+    # --- 全テーブルの新規自動作成（テーブルがない新規環境対策） ---
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nickname TEXT NOT NULL,
+        room_name TEXT,
+        match_type TEXT,
+        capacity INTEGER DEFAULT 4,
+        comment TEXT,
+        sns_contact TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expire_at DATETIME NOT NULL
+    )
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_hobbies (
+        user_id INTEGER NOT NULL,
+        hobby TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_free_times (
+        user_id INTEGER NOT NULL,
+        day TEXT NOT NULL,
+        period INTEGER NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_name TEXT NOT NULL,
+        day TEXT NOT NULL,
+        period INTEGER NOT NULL
+    )
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hobby TEXT NOT NULL,
+        day TEXT NOT NULL,
+        period INTEGER NOT NULL,
+        room_name TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        custom_time TEXT
+    )
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS event_members (
+        event_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        PRIMARY KEY (event_id, user_id),
+        FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    """)
+    
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id INTEGER NOT NULL,
+        sender_name TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
+    )
+    """)
+    
     # 1. users テーブルの UNIQUE 制約を外すための再構築、およびカラム追加
     try:
         cur.execute("PRAGMA table_info(users)")
@@ -72,20 +146,21 @@ def check_and_migrate_db():
         except:
             pass
             
-    # chat_messages テーブルの作成
+    # events テーブルのマイグレーション（created_at と custom_time カラムの追加）
     try:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,
-            sender_name TEXT NOT NULL,
-            message TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
-        )
-        """)
+        cur.execute("PRAGMA table_info(events)")
+        columns = [row[1] for row in cur.fetchall()]
+        if columns:
+            if "created_at" not in columns:
+                print("【DBマイグレーション】eventsテーブルにcreated_atカラムを追加します。")
+                cur.execute("ALTER TABLE events ADD COLUMN created_at DATETIME")
+                print("【DBマイグレーション】eventsテーブルのcreated_atカラム追加が完了しました。")
+            if "custom_time" not in columns:
+                print("【DBマイグレーション】eventsテーブルにcustom_timeカラムを追加します。")
+                cur.execute("ALTER TABLE events ADD COLUMN custom_time TEXT")
+                print("【DBマイグレーション】eventsテーブルのcustom_timeカラム追加が完了しました。")
     except Exception as e:
-        print(f"【DBマイグレーション警告】chat_messagesテーブルの作成に失敗しました: {e}")
+        print(f"【DBマイグレーション警告】eventsテーブルへのカラム追加に失敗しました: {e}")
         
     conn.commit()
     conn.close()
@@ -288,8 +363,9 @@ def get_all_matches_details():
     
     matches_list = []
     for eid, hobby, room_name in event_rows:
+        # ホスト判定のために、u.room_name カラムも取得
         cur.execute("""
-            SELECT u.id, u.nickname, u.sns_contact, u.comment, u.capacity
+            SELECT u.id, u.nickname, u.sns_contact, u.comment, u.room_name
             FROM event_members em
             JOIN users u ON em.user_id = u.id
             WHERE em.event_id = ?
@@ -297,13 +373,17 @@ def get_all_matches_details():
         members_data = cur.fetchall()
         
         if len(members_data) > 0:
-            student_name = members_data[0][1]
-            professor_name = members_data[1][1] if len(members_data) > 1 else "無し"
+            # room_name がある人を「ホスト(student)」、ない人を「ゲスト(professor)」に分ける
+            hosts = [m[1] for m in members_data if m[4] is not None]
+            guests = [m[1] for m in members_data if m[4] is None]
+            
+            host_name = hosts[0] if hosts else members_data[0][1]
+            guest_names = ", ".join(guests) if guests else "無し"
             
             matches_list.append({
                 "id": str(eid),
-                "student": {"nickname": student_name},
-                "professor": {"nickname": professor_name},
+                "student": {"nickname": host_name},
+                "professor": {"nickname": guest_names},
                 "room": {"name": room_name},
                 "matchedGame": hobby,
                 "members": [{"id": str(m[0]), "nickname": m[1], "sns_contact": m[2], "comment": m[3]} for m in members_data]
@@ -332,22 +412,22 @@ def get_event_members_with_details(event_id):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT u.id, u.nickname, u.sns_contact, u.comment
+        SELECT u.id, u.nickname, u.sns_contact, u.comment, u.room_name
         FROM event_members em
         JOIN users u ON em.user_id = u.id
         WHERE em.event_id = ?
     """, (event_id,))
     rows = cur.fetchall()
     conn.close()
-    return [{"id": str(r[0]), "nickname": r[1], "sns_contact": r[2], "comment": r[3]} for r in rows]
+    return [{"id": str(r[0]), "nickname": r[1], "sns_contact": r[2], "comment": r[3], "room_name": r[4]} for r in rows]
 
 def reset_all_data():
     conn = get_connection()
     cur = conn.cursor()
     tables = ["users", "user_hobbies", "user_free_times", "events", "event_members", "chat_messages"]
     for table in tables:
-        cur.execute(f"DELETE FROM {table}")
         try:
+            cur.execute(f"DELETE FROM {table}")
             cur.execute(f"DELETE FROM sqlite_sequence WHERE name='{table}'")
         except sqlite3.OperationalError:
             pass
