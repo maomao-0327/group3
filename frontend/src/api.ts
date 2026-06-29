@@ -9,44 +9,52 @@ export type UserPayload = {
   nickname: string;
   games: string[];
   availability: AvailabilitySlot[];
+  room_name?: string | null;
+  capacity?: number;
+  comment?: string;
+  sns_contact?: string;
 };
 
-export type RoomPayload = {
-  name: string;
-  building: string;
-  capacity: number;
-  availableSlots: AvailabilitySlot[];
+export type User = {
+  id: string;
+  nickname: string;
+  room_name?: string | null;
+  capacity?: number;
+  comment?: string;
+  sns_contact?: string;
+  games?: string[];
+  availability?: AvailabilitySlot[];
 };
-
-export type User = UserPayload & { id: string };
-export type Room = RoomPayload & { id: string };
 
 export type Match = {
   id: string;
-  student: User;
-  professor: User;
-  room: Room;
+  student?: { nickname: string } | null;
+  professor?: { nickname: string } | null;
+  room?: { name: string } | null;
+  studentId?: string;
+  professorId?: string;
   matchedGame: string;
-  slot: AvailabilitySlot;
+  members?: User[];
 };
 
-export type MatchSuggestion = {
-  student: User;
-  professor: User;
-  room: Room;
-  sharedGames: string[];
-  slot: AvailabilitySlot;
+export type ChatMessage = {
+  id: number;
+  sender: string;
+  text: string;
+  time: string;
 };
+
+const BASE_URL = ""; // 相対パスにしてプロキシとFlaskの両方で稼働可能にする
 
 export const api = {
   fetchJson: async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const res = await fetch(path, {
+    const res = await fetch(`${BASE_URL}${path}`, {
       headers: { "Content-Type": "application/json" },
       ...init,
     });
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`${res.status}: ${body}`);
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `${res.status}: エラーが発生しました`);
     }
     if (res.status === 204) {
       return {} as T;
@@ -55,43 +63,67 @@ export const api = {
   },
 
   getUsers: () => api.fetchJson<User[]>("/api/users"),
-  getRooms: () => api.fetchJson<Room[]>("/api/rooms"),
   getMatches: () => api.fetchJson<Match[]>("/api/matches"),
-  getSuggestions: () => api.fetchJson<MatchSuggestion[]>("/api/matches/suggestions"),
+  
+  checkStatus: (userId: string) => 
+    api.fetchJson<{
+      is_matched: boolean;
+      exists?: boolean;
+      event_id?: number;
+      matched_game?: string;
+      day?: string;
+      period?: number;
+      room_name?: string;
+      members?: User[];
+      capacity?: number;
+    }>(`/api/check_status?user_id=${userId}`),
 
   registerUser: (payload: UserPayload) =>
-    api.fetchJson<User>("/api/users/register", {
+    api.fetchJson<{ success: boolean; user_id: number }>("/api/register", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
 
-  createRoom: (payload: RoomPayload) =>
-    api.fetchJson<Room>("/api/rooms", {
+  triggerMatching: () =>
+    api.fetchJson<{ success: boolean; message: string }>("/api/match", {
       method: "POST",
-      body: JSON.stringify(payload),
     }),
 
-  confirmMatch: (payload: {
-    studentId: string;
-    professorId: string;
-    roomId: string;
-    matchedGame: string;
-    slot: AvailabilitySlot;
+  getChat: (eventId: number) => 
+    api.fetchJson<ChatMessage[]>(`/api/events/${eventId}/chat`),
+
+  sendChat: (eventId: number, sender: string, message: string) =>
+    api.fetchJson<{ success: boolean }>(`/api/events/${eventId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ sender, message }),
+    }),
+
+  joinEvent: (payload: {
+    host_user_id: number;
+    nickname: string;
+    comment: string;
+    sns_contact: string;
+    game: string;
+    day: string;
+    start: string;
   }) =>
-    api.fetchJson<Match>("/api/matches", {
+    api.fetchJson<{
+      success: boolean;
+      user_id: number;
+      event_id: number;
+      room_name: string;
+      matched_game: string;
+      day: string;
+      period: number;
+      members: User[];
+      capacity: number;
+    }>("/api/join_event", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
 
-  // 【修正案A】エラーが出たエンドポイント。もしサーバーが対応していないなら下記Bを試す
-  deleteUser: (id: string) =>
-    api.fetchJson<void>(`/api/users/${id}`, {
-      method: "DELETE",
-    }),
-
-  // 【修正案B】募集の実態である「Room」側を削除するエンドポイント
-  deleteRoom: (id: string) =>
-    api.fetchJson<void>(`/api/rooms/${id}`, {
+  deleteUser: (userId: string) =>
+    api.fetchJson<{ success: boolean; message: string }>(`/api/users/${userId}`, {
       method: "DELETE",
     }),
 };

@@ -3,8 +3,21 @@ import db
 import matching
 from datetime import datetime, timedelta
 import re
+import os
 
-app = Flask(__name__)
+# ローカル環境の Vite ビルド先 (frontend/dist) または 本番環境の配置先 (dist) から静的ファイルを配信する設定
+if os.path.exists('frontend/dist'):
+    app = Flask(__name__, 
+                static_folder='frontend/dist/assets', 
+                static_url_path='/assets',
+                template_folder='frontend/dist')
+elif os.path.exists('dist'):
+    app = Flask(__name__, 
+                static_folder='dist/assets', 
+                static_url_path='/assets',
+                template_folder='dist')
+else:
+    app = Flask(__name__)
 
 # CORS対応を全ルートに適用するミドルウェア (React SPAとの接続用)
 @app.after_request

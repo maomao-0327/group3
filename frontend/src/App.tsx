@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, AvailabilitySlot } from "./api";
+import React, { useEffect, useMemo, useState } from "react";
+import { api, AvailabilitySlot, User, Match, ChatMessage } from "./api";
 
 // 選択肢となる標準の時限定義（IDがそのまま班員のDBのperiod(1~7)に対応）
 const TIME_SLOT_OPTIONS = [
@@ -46,84 +46,93 @@ const HOBBY_TAG_GROUPS = [
 type Toast = {
   id: number;
   message: string;
-  type: "success" | "error" | "info";
-};
-
-type ChatMessage = {
-  id: number;
-  sender: string;
-  text: string;
-  time: string;
+  type: "success" | "error" | "info" | "neon-match";
 };
 
 function App() {
-  const [users, setUsers] = useState<any[]>([]);
-  const [matches, setMatches] = useState<any[]>([]);
-  
+  const getCapacity = (event: any): number => {
+    if (!event || event.capacity === undefined || event.capacity === null) return 4;
+    const val = Number(event.capacity);
+    return isNaN(val) ? 4 : val;
+  };
+
+  const [users, setUsers] = useState<User[]>([]);
+  const [matches, setMatches] = useState<Match[]>([]);
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [loading, setLoading] = useState(false);
-  
   const [view, setView] = useState<"dashboard" | "event">("dashboard");
-  const [showDebug, setShowDebug] = useState<boolean>(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [activeEvent, setActiveEvent] = useState<any>(null);
-  const [matchedPeople, setMatchedPeople] = useState<string[]>([]);
-
-  const [otherTagInput, setOtherTagInput] = useState<string>("");
-  const [activeModal, setActiveModal] = useState<"none" | "standard" | "custom">("none");
-
-  const [selectedDay, setSelectedDay] = useState<string>("Mon");
-  const [selectedSlotIndex, setSelectedSlotIndex] = useState<number>(0);
-
-  const [customDay, setCustomDay] = useState<string>("Mon");
-  const [customTimeText, setCustomTimeText] = useState<string>("");
-
-  const [toasts, setToasts] = useState<Toast[]>([]);
-
-  // 検索・フィルタ用ステート
-  const [filterGameSearch, setFilterGameSearch] = useState<string>("");
-  const [filterDay, setFilterDay] = useState<string>("ALL");
-  const [filterImmediateOnly, setFilterImmediateOnly] = useState<boolean>(false);
-
-  // 簡易チャット用ステート
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState<string>("");
-
-  const [deletedIds, setDeletedIds] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem("fight_club_deleted_ids");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
+  const [chatInput, setChatInput] = useState("");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showMatchNotification, setShowMatchNotification] = useState(false);
+  
+  const [filterGameSearch, setFilterGameSearch] = useState("");
+  const [filterDay, setFilterDay] = useState("ALL");
+  const [filterImmediateOnly, setFilterImmediateOnly] = useState(false);
+  const [otherTagInput, setOtherTagInput] = useState("");
+  
+  const [myUserId, setMyUserId] = useState<string | null>(() => {
+    return localStorage.getItem("fight_club_my_user_id") || null;
   });
 
-  // メイン募集フォーム
+  const [registerType, setRegisterType] = useState<"host" | "guest">("host");
+  
   const [userForm, setUserForm] = useState({
     nickname: "",
     games: [] as string[],
     availability: [] as AvailabilitySlot[],
-    customLocation: "",
+    customLocation: "7A101",
     comment: "",
     snsContact: "", 
+    capacity: "4",
   });
 
-  // プリセット自動保存
+  const [selectedDay, setSelectedDay] = useState("Mon");
+  const [selectedSlotIndex, setSelectedSlotIndex] = useState(0);
+  const [customDay, setCustomDay] = useState("Mon");
+  const [customTimeText, setCustomTimeText] = useState("");
+  const [activeModal, setActiveModal] = useState<"none" | "standard" | "custom" | "join_guest">("none");
+  
+  const [joiningHostInfo, setJoiningHostInfo] = useState<{
+    hostUser: User;
+    game: string;
+    slot: AvailabilitySlot;
+  } | null>(null);
+
+  const [guestForm, setGuestForm] = useState({
+    nickname: "",
+    comment: "",
+    snsContact: ""
+  });
+
+  // プリセット自動ロード
   useEffect(() => {
     const savedNickname = localStorage.getItem("fight_club_preset_nickname") || "";
-    const savedLocation = localStorage.getItem("fight_club_preset_location") || "";
+    const savedLocation = localStorage.getItem("fight_club_preset_location") || "7A101";
+    const savedSns = localStorage.getItem("fight_club_preset_sns") || "";
     setUserForm(prev => ({
       ...prev,
       nickname: savedNickname,
-      customLocation: savedLocation
+      customLocation: savedLocation,
+      snsContact: savedSns
+    }));
+    setGuestForm(prev => ({
+      ...prev,
+      nickname: prev.nickname || savedNickname,
+      snsContact: savedSns
     }));
   }, []);
 
+  // プリセット自動保存
   useEffect(() => {
     localStorage.setItem("fight_club_preset_nickname", userForm.nickname);
     localStorage.setItem("fight_club_preset_location", userForm.customLocation);
-  }, [userForm.nickname, userForm.customLocation]);
+    localStorage.setItem("fight_club_preset_sns", userForm.snsContact || guestForm.snsContact);
+  }, [userForm.nickname, userForm.customLocation, userForm.snsContact, guestForm.snsContact]);
 
-  const addToast = (message: string, type: "success" | "error" | "info" = "success") => {
+  const addToast = (message: string, type: Toast["type"] = "success") => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
@@ -149,91 +158,125 @@ function App() {
 
   useEffect(() => {
     refreshAll();
+    const timer = setInterval(refreshAll, 5000);
+    return () => clearInterval(timer);
   }, []);
 
-  // フロントの選択時間枠を、班員のバックエンド仕様（例："Mon3"）の文字列リストに変換するヘルパー
-  const convertSlotsToBackendFormat = (slots: AvailabilitySlot[]): string[] => {
-    return slots.map(slot => {
-      // 標準枠から該当するインデックス(1~7)を探す
-      const matchedOption = TIME_SLOT_OPTIONS.find(opt => opt.start === slot.start);
-      const periodNum = matchedOption ? matchedOption.id : "3"; // カスタムなどの例外はデフォルト3限扱い
-      return `${slot.day}${periodNum}`;
-    });
-  };
+  // マッチング成立監視 & チャットポーリング
+  useEffect(() => {
+    if (!myUserId) return;
+    
+    let isMounted = true;
+    const checkMyStatus = async () => {
+      try {
+        const status = await api.checkStatus(myUserId);
+        
+        if (status.exists === false && isMounted) {
+          setMyUserId(null);
+          localStorage.removeItem("fight_club_my_user_id");
+          setActiveEvent(null);
+          setShowMatchNotification(false);
+          setStatusMessage("");
+          setView("dashboard");
+          addToast("セッションが終了したか、部屋が削除されました。", "info");
+          return;
+        }
+        
+        if (status.is_matched && isMounted) {
+          setActiveEvent({
+            id: status.event_id,
+            room_name: status.room_name,
+            matched_game: status.matched_game,
+            day: status.day,
+            period: status.period,
+            members: status.members,
+            capacity: status.capacity
+          });
+          
+          const isFull = (status.members || []).length >= (status.capacity || 4);
+          
+          setView((prevView) => {
+            if (prevView !== "event") {
+              if (isFull) {
+                setShowMatchNotification((prevNotified) => {
+                  if (!prevNotified) {
+                    addToast("マッチングが成立しました。", "neon-match");
+                    return true;
+                  }
+                  return prevNotified;
+                });
+              }
+            }
+            return prevView;
+          });
+        } else if (isMounted) {
+          setActiveEvent(null);
+          setShowMatchNotification(false);
+          setStatusMessage("");
+          setView((prevView) => {
+            if (prevView === "event") {
+              addToast("部屋が解散されたか、退出しました。", "info");
+              return "dashboard";
+            }
+            return prevView;
+          });
+        }
+      } catch (e) {
+        console.error("ステータス確認エラー:", e);
+      }
+    };
+    checkMyStatus();
+    const statusTimer = setInterval(checkMyStatus, 3000);
+    return () => {
+      isMounted = false;
+      clearInterval(statusTimer);
+    };
+  }, [myUserId]);
 
-  // 班員の自動マッチングエンジン(matching.py)の挙動をシミュレート、または適合実行するトリガー
+  useEffect(() => {
+    if (view === "event") {
+      document.body.classList.add("event-view-active");
+    } else {
+      document.body.classList.remove("event-view-active");
+    }
+  }, [view]);
+
+  // チャットポーリング
+  useEffect(() => {
+    if (view !== "event" || !activeEvent?.id) return;
+    const fetchChat = async () => {
+      try {
+        const chats = await api.getChat(activeEvent.id);
+        setChatMessages(chats);
+      } catch (e) {
+        console.error("チャット取得エラー:", e);
+      }
+    };
+    fetchChat();
+    const chatTimer = setInterval(fetchChat, 2000);
+    return () => clearInterval(chatTimer);
+  }, [view, activeEvent]);
+
   const handleTriggerMatchingEngine = () => {
     setLoading(true);
-    setStatusMessage("班員の自動マッチングエンジン(matching.py)の条件判定を回しています...");
-
-    const activeUsers = users.filter(u => !deletedIds.includes(u.id));
-    
-    // バックエンドのロジックに合わせ、「同じ趣味」「同じ曜日・時限」で3人以上集まっているグループを走査
-    let matchFound = false;
-
-    for (const group of HOBBY_TAG_GROUPS) {
-      for (const tag of group.tags) {
-        for (const d of DAYS_OF_WEEK) {
-          for (const slotOpt of TIME_SLOT_OPTIONS) {
-            
-            // この条件に合致するユーザーをカウント
-            const pool = activeUsers.filter(u => {
-              const hasGame = u.games?.includes(tag);
-              const hasTime = u.availability?.some((av: any) => av.day === d.value && av.start === slotOpt.start);
-              return hasGame && hasTime;
-            });
-
-            // 班員仕様：3人以上集まればイベント成立
-            if (pool.length >= 3) {
-              matchFound = true;
-              const host = pool[0];
-              
-              // マッチ成立イベントオブジェクトを生成して画面展開
-              setActiveEvent({
-                room: { name: host.nickname.split("@")[1]?.split(" [")[0] || "自動割り当て空き教室" },
-                slot: { day: d.value, start: slotOpt.label.split(" ")[0] },
-                matchedGame: tag,
-                hostSns: host.nickname.includes("[SNS:") ? host.nickname.split("[SNS:")[1].split("]")[0] : "未登録",
-              });
-
-              setChatMessages([
-                { id: 1, sender: "SYSTEM", text: `3名以上のマッチングが成立しました！[種目: ${tag}] 伝言板で合流の連絡を取り合ってください。`, time: "SYSTEM" }
-              ]);
-
-              setMatchedPeople(pool.map(u => u.nickname.split(" ")[0]));
-              setView("event");
-              addToast("3名以上の集団マッチングが成立しました！", "success");
-              break;
-            }
-          }
-          if (matchFound) break;
-        }
-        if (matchFound) break;
-      }
-      if (matchFound) break;
-    }
-
-    if (!matchFound) {
-      setStatusMessage("条件（同一ゲーム・同一コマに3人以上）を満たすグループがまだありません。待機中です。");
-      addToast("マッチング要件(3人以上)を満たすペアがありません", "info");
-    }
-    setLoading(false);
+    setStatusMessage("マッチングエンジンを回しています...");
+    api.triggerMatching()
+      .then(async () => {
+        addToast("マッチング処理が完了しました", "success");
+        setStatusMessage("マッチング完了。");
+        await refreshAll();
+      })
+      .catch(() => {
+        addToast("マッチング処理に失敗しました", "error");
+      })
+      .finally(() => setLoading(false));
   };
 
   const handleAddStandardTime = () => {
     const targetSlot = TIME_SLOT_OPTIONS[selectedSlotIndex];
     if (!targetSlot) return;
-
-    const newSlot: AvailabilitySlot = {
-      day: selectedDay,
-      start: targetSlot.start,
-      end: targetSlot.end
-    };
-
-    const exists = userForm.availability.some(
-      s => s.day === newSlot.day && s.start === newSlot.start
-    );
-
+    const newSlot = { day: selectedDay, start: targetSlot.start, end: targetSlot.end };
+    const exists = userForm.availability.some(s => s.day === newSlot.day && s.start === newSlot.start);
     if (!exists) {
       setUserForm({ ...userForm, availability: [...userForm.availability, newSlot] });
       addToast("空き時間をリストに追加しました", "info");
@@ -246,15 +289,8 @@ function App() {
   const handleAddCustomTime = () => {
     const text = customTimeText.trim();
     if (!text) return;
-
-    const newSlot: AvailabilitySlot = {
-      day: customDay,
-      start: text,
-      end: "CUSTOM"
-    };
-
+    const newSlot = { day: customDay, start: text, end: "CUSTOM" };
     const exists = userForm.availability.some(s => s.day === newSlot.day && s.start === newSlot.start);
-
     if (!exists) {
       setUserForm({ ...userForm, availability: [...userForm.availability, newSlot] });
       setCustomTimeText("");
@@ -269,119 +305,172 @@ function App() {
   };
 
   const handleToggleTag = (tag: string) => {
-    const isSelected = userForm.games.includes(tag);
-    const nextGames = isSelected
-      ? userForm.games.filter((g) => g !== tag)
-      : [...userForm.games, tag];
-    setUserForm({ ...userForm, games: nextGames });
+    setUserForm(prev => {
+      const isSelected = prev.games.includes(tag);
+      const nextGames = isSelected
+        ? prev.games.filter((g) => g !== tag)
+        : [...prev.games, tag];
+      return { ...prev, games: Array.from(new Set(nextGames)) };
+    });
   };
 
   const handleAddCustomTag = () => {
     const trimmed = otherTagInput.trim();
     if (!trimmed) return;
-    if (!userForm.games.includes(trimmed)) {
-      setUserForm({ ...userForm, games: [...userForm.games, trimmed] });
-      setOtherTagInput("");
-    }
+    setUserForm(prev => {
+      if (prev.games.includes(trimmed)) return prev;
+      return { ...prev, games: [...prev.games, trimmed] };
+    });
+    setOtherTagInput("");
   };
 
   const handleDeleteUser = async (id: string) => {
-    if (!confirm("このエントリー募集を取り消しますか？")) return;
+    if (!confirm("このエントリー募集を取り消しますか？（部屋から完全に退室します）")) return;
     setLoading(true);
-    const nextDeletedIds = [...deletedIds, id];
-    setDeletedIds(nextDeletedIds);
-    localStorage.setItem("fight_club_deleted_ids", JSON.stringify(nextDeletedIds));
-    addToast("募集エントリーを取り消しました", "success");
-    setLoading(false);
+    try {
+      await api.deleteUser(id);
+      
+      if (id.toString() === myUserId?.toString()) {
+        setMyUserId(null);
+        localStorage.removeItem("fight_club_my_user_id");
+        setActiveEvent(null);
+        setShowMatchNotification(false);
+        setStatusMessage("");
+        setView("dashboard");
+      }
+      addToast("退室/募集削除が完了しました", "success");
+      await refreshAll();
+    } catch (e: any) {
+      addToast("退室処理に失敗しました: " + e.message, "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // 班員のapp.py形式のデータ構造へ変換してシリアライズ送信するメソッド
   const onUserSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!userForm.nickname.trim() || !userForm.customLocation.trim()) {
-      addToast("必須項目を入力してください", "error");
+    const nickname = userForm.nickname.trim();
+    if (!nickname) {
+      addToast("ニックネームを入力してください", "error");
+      return;
+    }
+    if (!userForm.customLocation.trim()) {
+      addToast("開催場所を選択してください", "error");
       return;
     }
     if (userForm.availability.length === 0 || userForm.games.length === 0) {
       addToast("空きコマと希望タイトルを登録してください", "error");
       return;
     }
-
     setLoading(true);
     try {
-      // 班員の引数「hobbies」および「free_times (例: ["Mon3", "Tue5"])」の形式を構築
-      const parsedHobbies = userForm.games;
-      const parsedFreeTimes = convertSlotsToBackendFormat(userForm.availability);
-
-      // コメントやSNSアカウントを班員DBの1つのテキストフィールド「nickname」に安全にブレンド
-      const commentStr = userForm.comment.trim() ? ` [COMM:${userForm.comment.trim()}]` : "";
-      const snsStr = userForm.snsContact.trim() ? ` [SNS:${userForm.snsContact.trim()}]` : "";
-      const compositeNickname = `${userForm.nickname} (@${userForm.customLocation})${commentStr}${snsStr}`;
-
-      // 班員のデータベーススキーマ(db.py)へ完全に互換するペイロードで登録要求をシミュレート実行
-      await api.registerUser({
-        role: "student",
-        nickname: compositeNickname,
-        games: parsedHobbies, 
+      const res = await api.registerUser({
+        role: registerType === "host" ? "professor" : "student", 
+        nickname: nickname,
+        room_name: registerType === "host" ? userForm.customLocation : null,
+        capacity: parseInt(userForm.capacity),
+        comment: userForm.comment.trim(),
+        sns_contact: userForm.snsContact.trim(),
+        games: userForm.games, 
         availability: userForm.availability
       });
-
-      addToast("班員バックエンド形式で募集データの登録が完了しました", "success");
-      setStatusMessage("登録完了。同一条件に3人以上が集まると、マッチングエンジンによって自動教室割り当てが行われます。");
       
-      setUserForm({ 
-        nickname: userForm.nickname, 
-        customLocation: userForm.customLocation, 
+      addToast("部屋を立てました！", "success");
+      setStatusMessage("部屋を作成しました。参加者を待っています...");
+      
+      setMyUserId(res.user_id.toString());
+      localStorage.setItem("fight_club_my_user_id", res.user_id.toString());
+      setUserForm(prev => ({ 
+        ...prev,
         games: [], 
         availability: [], 
         comment: "",
-        snsContact: ""
-      });
+        snsContact: "",
+        capacity: "4"
+      }));
       await refreshAll();
     } catch (err: any) {
-      addToast("投稿に失敗しました", "error");
+      addToast(err.message, "error");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleManualJoinLobbyUser = (hostUser: any, chosenGame: string, slot: AvailabilitySlot) => {
-    const rawNickname = hostUser.nickname || "";
-    let extractedSns = "未登録";
-    if (rawNickname.includes("[SNS:")) {
-      extractedSns = rawNickname.split("[SNS:")[1].split("]")[0];
+  const handleSendChatMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !activeEvent?.id) return;
+    
+    const senderName = userForm.nickname || "あなた";
+    try {
+      await api.sendChat(activeEvent.id, senderName, chatInput.trim());
+      setChatInput("");
+      const chats = await api.getChat(activeEvent.id);
+      setChatMessages(chats);
+    } catch (e) {
+      addToast("メッセージの送信に失敗しました", "error");
     }
-
-    setActiveEvent({
-      room: { name: hostUser.nickname.split("@")[1]?.split(" [")[0] || "学内指定場所" },
-      slot: slot,
-      matchedGame: chosenGame,
-      hostSns: extractedSns,
-    });
-
-    setChatMessages([
-      { id: 1, sender: "SYSTEM", text: "マッチングが成立しました。合流に向けて伝言板を活用してください。", time: "SYSTEM" }
-    ]);
-
-    setMatchedPeople([hostUser.nickname.split(" ")[0], "あなた"]);
-    setView("event");
-    addToast("マッチングが成立しました", "success");
   };
 
-  const handleSendChatMessage = (e: React.FormEvent) => {
+  const handleManualJoinLobbyUser = (hostUser: User, chosenGame: string, slot: AvailabilitySlot) => {
+    setJoiningHostInfo({
+      hostUser: hostUser,
+      game: chosenGame,
+      slot: slot
+    });
+    const savedNickname = localStorage.getItem("fight_club_preset_nickname") || "";
+    setGuestForm(prev => ({
+      ...prev,
+      nickname: prev.nickname || savedNickname
+    }));
+    setActiveModal("join_guest");
+  };
+
+  const handleJoinEventSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
-
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-
-    setChatMessages(prev => [...prev, {
-      id: Date.now(),
-      sender: "あなた",
-      text: chatInput.trim(),
-      time: timeStr
-    }]);
-    setChatInput("");
+    const nickname = guestForm.nickname.trim();
+    if (!nickname) {
+      addToast("ニックネームを入力してください", "error");
+      return;
+    }
+    if (!joiningHostInfo) return;
+    
+    setLoading(true);
+    try {
+      const res = await api.joinEvent({
+        host_user_id: parseInt(joiningHostInfo.hostUser.id),
+        nickname: nickname,
+        comment: guestForm.comment.trim(),
+        sns_contact: guestForm.snsContact.trim(),
+        game: joiningHostInfo.game,
+        day: joiningHostInfo.slot.day,
+        start: joiningHostInfo.slot.start
+      });
+      
+      addToast("部屋に入りました！", "success");
+      
+      setMyUserId(res.user_id.toString());
+      localStorage.setItem("fight_club_my_user_id", res.user_id.toString());
+      localStorage.setItem("fight_club_preset_nickname", nickname);
+      setUserForm(prev => ({ ...prev, nickname: nickname }));
+      
+      setActiveEvent({
+        id: res.event_id,
+        room_name: res.room_name,
+        matched_game: res.matched_game,
+        day: res.day,
+        period: res.period,
+        members: res.members,
+        capacity: res.capacity
+      });
+      
+      setActiveModal("none");
+      setView("event");
+      await refreshAll();
+    } catch (err: any) {
+      addToast(err.message, "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const filteredAndVisibleUsers = useMemo(() => {
@@ -389,19 +478,18 @@ function App() {
     const daysMap = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const currentDayValue = daysMap[now.getDay()]; 
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
     return users
-      .filter((u) => !deletedIds.includes(u.id))
+      .filter((u) => u.id.toString() !== myUserId?.toString())
       .filter((u) => {
         if (filterGameSearch.trim() !== "") {
           const searchLower = filterGameSearch.toLowerCase().trim();
-          if (!u.games?.some((g: string) => g.toLowerCase().includes(searchLower))) return false;
+          if (!u.games?.some((g) => g.toLowerCase().includes(searchLower))) return false;
         }
         if (filterDay !== "ALL" && !filterImmediateOnly) {
-          if (!u.availability?.some((av: any) => av.day === filterDay)) return false;
+          if (!u.availability?.some((av) => av.day === filterDay)) return false;
         }
         if (filterImmediateOnly) {
-          return u.availability?.some((av: any) => {
+          return u.availability?.some((av) => {
             if (av.day !== currentDayValue) return false;
             if (av.end === "CUSTOM") return true;
             const [sh, sm] = av.start.split(":").map(Number);
@@ -411,30 +499,48 @@ function App() {
         }
         return true;
       });
-  }, [users, deletedIds, filterGameSearch, filterDay, filterImmediateOnly]);
+  }, [users, myUserId, filterGameSearch, filterDay, filterImmediateOnly]);
 
   if (view === "event") {
+    const isMatchedConfirmed = activeEvent && activeEvent.members && activeEvent.members.length >= getCapacity(activeEvent);
     return (
-      <div className="app">
-        <header>
+      <div className="app event-view-active">
+        <header style={{ position: "relative" }}>
           <h1>FIGHT CLUB</h1>
-          <p className="subtitle">MATCH SETTLED</p>
+          <p className="subtitle">
+            {isMatchedConfirmed ? "MATCH SETTLED" : "WAITING FOR PLAYERS"}
+            {activeEvent && ` (${activeEvent.members?.length} / ${getCapacity(activeEvent)}名)`}
+          </p>
         </header>
-
-        <section style={{ borderColor: "#ff007f" }}>
+        <section style={{ borderColor: isMatchedConfirmed ? "var(--accent-pink)" : "var(--accent-cyan)" }}>
           <div style={{ textAlign: "center", marginBottom: "32px" }}>
-            <h2 style={{ color: "#ff007f", border: "none", padding: 0, fontSize: "2rem" }}>MATCH CONFIRMED</h2>
+            <h2 style={{ 
+              color: "#fff", 
+              border: "none", 
+              padding: "10px 24px", 
+              fontSize: "2.5rem", 
+              fontWeight: "900", 
+              letterSpacing: "4px", 
+              textTransform: "uppercase",
+              textShadow: isMatchedConfirmed 
+                ? "0 0 10px var(--accent-pink), 0 0 20px rgba(255, 0, 127, 0.6)"
+                : "0 0 10px var(--accent-cyan), 0 0 20px rgba(0, 255, 255, 0.6)",
+              borderTop: isMatchedConfirmed ? "2px solid var(--accent-pink)" : "2px solid var(--accent-cyan)",
+              borderBottom: isMatchedConfirmed ? "2px solid var(--accent-pink)" : "2px solid var(--accent-cyan)",
+              display: "inline-block"
+            }}>
+              {isMatchedConfirmed ? "MATCH CONFIRMED" : "RECRUITING MEMBERS"}
+            </h2>
           </div>
-
           <div className="event-grid">
             <div className="event-card">
-              <h3>LOCATION</h3>
-              <p className="highlight">{activeEvent?.room?.name || "指定教室"}</p>
+              <h3>LOCATION (部屋)</h3>
+              <p className="highlight">{activeEvent?.room_name || "指定教室"}</p>
             </div>
             <div className="event-card">
               <h3>TIME</h3>
               <p className="highlight" style={{ color: "#ffffff" }}>
-                {activeEvent?.slot ? `${DAYS_OF_WEEK.find(d => d.value === activeEvent.slot.day)?.label || activeEvent.slot.day} ${activeEvent.slot.start}` : "SLOT"}
+                {activeEvent?.day ? `${DAYS_OF_WEEK.find(d => d.value === activeEvent.day)?.label || activeEvent.day} ${activeEvent.period}限` : "マッチ確定枠"}
               </p>
             </div>
           </div>
@@ -442,29 +548,33 @@ function App() {
           <div className="event-grid" style={{ marginTop: "16px" }}>
             <div className="event-card">
               <h3>SELECTED TITLE</h3>
-              <p className="highlight" style={{ color: "#ff007f" }}>{activeEvent?.matchedGame || "GAME"}</p>
+              <p className="highlight" style={{ color: isMatchedConfirmed ? "var(--accent-pink)" : "var(--accent-cyan)" }}>{activeEvent?.matched_game || "GAME"}</p>
             </div>
-            <div className="event-card" style={{ border: "1px dashed #ff007f" }}>
+            <div className="event-card" style={{ border: isMatchedConfirmed ? "1px dashed var(--accent-pink)" : "1px dashed var(--accent-cyan)" }}>
               <h3>HOST CONTACT ID (SNS)</h3>
-              <p className="highlight" style={{ color: "#00ffff", fontSize: "1.2rem" }}>{activeEvent?.hostSns}</p>
+              <p className="highlight" style={{ color: "#00ffff", fontSize: "1.2rem" }}>
+                {(activeEvent?.members || []).filter((m: any) => m.sns_contact).map((m: any) => `${m.nickname}: [${m.sns_contact}]`).join(' | ') || '登録なし'}
+              </p>
             </div>
           </div>
-
           <div className="event-card" style={{ marginTop: "16px" }}>
             <h3>PLAYERS</h3>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "8px" }}>
-              {matchedPeople.map((p) => <span key={p} className="badge">{p}</span>)}
+              {activeEvent?.members?.map((m: any) => (
+                <span key={m.nickname} className="badge" title={m.comment}>
+                  {m.nickname} {m.comment && `(${m.comment})`}
+                </span>
+              ))}
             </div>
           </div>
-
           <div style={{ marginTop: "24px", background: "#050505", border: "1px solid #222", padding: "16px" }}>
             <h3 style={{ fontSize: "14px", color: "#fff", letterSpacing: "1px", marginBottom: "12px", borderBottom: "1px solid #222", paddingBottom: "6px" }}>
-              LOBBY CHAT BOARD (簡易伝言板)
+              LOBBY CHAT BOARD (伝言板)
             </h3>
             <div style={{ height: "180px", overflowY: "auto", background: "#000", border: "1px solid #111", padding: "10px", marginBottom: "12px" }}>
               {chatMessages.map(msg => (
                 <div key={msg.id} style={{ marginBottom: "8px", fontSize: "13px" }}>
-                  <span style={{ color: msg.sender === "あなた" ? "#ff007f" : msg.sender === "SYSTEM" ? "#888" : "#00ffff", fontWeight: "bold", marginRight: "8px" }}>
+                  <span style={{ color: msg.sender === (userForm.nickname || "あなた") ? "#ff007f" : msg.sender === "SYSTEM" ? "#888" : "#00ffff", fontWeight: "bold", marginRight: "8px" }}>
                     [{msg.sender}]
                   </span>
                   <span style={{ color: "#ccc" }}>{msg.text}</span>
@@ -484,8 +594,30 @@ function App() {
             </form>
           </div>
  
-          <div style={{ textAlign: "center", marginTop: "32px" }}>
-            <button onClick={() => { setView("dashboard"); refreshAll(); }}>掲示板に戻る</button>
+          <div style={{ textAlign: "center", marginTop: "32px", display: "flex", justifyContent: "center", gap: "16px", flexWrap: "wrap" }}>
+            <button 
+              className="btn-secondary" 
+              onClick={() => { 
+                setView("dashboard"); 
+                refreshAll(); 
+              }}
+            >
+              ロビーに戻る (一時退出)
+            </button>
+            {myUserId && (() => {
+              const myMember = activeEvent?.members?.find((m: any) => m.id.toString() === myUserId.toString());
+              const isHost = myMember && myMember.room_name !== null && myMember.room_name !== undefined;
+              return (
+                <button 
+                  style={{ background: "#cc0000", border: "1px solid #ff3333" }}
+                  onClick={() => { 
+                    handleDeleteUser(myUserId);
+                  }}
+                >
+                  {isHost ? "部屋を削除して解散 (エントリー削除)" : "部屋から完全に退出 (入室状況を削除)"}
+                </button>
+              );
+            })()}
           </div>
         </section>
       </div>
@@ -494,50 +626,180 @@ function App() {
 
   return (
     <div className="app">
-      <div style={{ position: "fixed", top: "20px", right: "20px", zIndex: 9999, display: "flex", flexDirection: "column", gap: "10px" }}>
+      <div className="toast-container">
         {toasts.map((t) => (
-          <div key={t.id} style={{
-            background: t.type === "success" ? "#ff007f" : t.type === "error" ? "#ff3333" : "#ffffff",
-            color: t.type === "info" ? "#000000" : "#ffffff",
-            padding: "14px 24px",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: "2px",
-            fontWeight: "bold",
-            fontSize: "14px",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.7)",
-            minWidth: "260px"
-          }}>
+          <div 
+            key={t.id} 
+            className={`toast ${t.type === "neon-match" ? "toast-neon-match" : ""}`}
+            style={t.type !== "neon-match" ? {
+              background: t.type === "success" ? "#ff007f" : t.type === "error" ? "#ff3333" : "#ffffff",
+              color: t.type === "info" ? "#000000" : "#ffffff",
+              border: "1px solid rgba(255,255,255,0.2)"
+            } : {}}
+          >
             {t.message}
           </div>
         ))}
       </div>
-
-      <header>
+      <header style={{ position: "relative" }}>
         <h1>F I G H T・C L U B</h1>
         <p className="subtitle">P2P CLASSROOM MATCHING SYSTEM</p>
       </header>
-
-      {statusMessage && <div className="status-banner">{statusMessage}</div>}
-
-      <section>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-          <h2>対戦・マッチの新規募集をかける</h2>
+      {activeEvent && activeEvent.members && activeEvent.members.length >= getCapacity(activeEvent) ? (
+        <div className="match-confirmed-alert">
+          <h2>MATCH CONFIRMED</h2>
+          <p style={{ fontSize: "1.1rem", margin: "10px 0", color: "#ccc", fontWeight: "bold" }}>
+            対戦メンバーが揃いました！（マッチング成立）
+          </p>
+          <div style={{ fontSize: "0.95rem", color: "var(--accent-cyan)", marginBottom: "20px", fontWeight: "bold" }}>
+            場所: {activeEvent.room_name} | 種目: {activeEvent.matched_game} | メンバー数: {activeEvent.members.length}/{getCapacity(activeEvent)}名
+          </div>
+          <div style={{ display: "flex", justifyContent: "center", gap: "16px", flexWrap: "wrap" }}>
+            <button 
+              className="btn-enter-room" 
+              onClick={() => setView("event")}
+            >
+              部屋に入る (ENTER)
+            </button>
+          </div>
         </div>
+      ) : (
+        (statusMessage || activeEvent) && (
+          <div className="status-banner" style={{ background: "#005f73", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 20px", flexWrap: "wrap", gap: "10px" }}>
+            <span style={{ fontWeight: "bold" }}>
+              {statusMessage || "対戦メンバーの合流を待っています..."}
+              {activeEvent && activeEvent.members && ` (現在のメンバー: ${activeEvent.members.length}/${getCapacity(activeEvent)}名)`}
+            </span>
+            <div style={{ display: "flex", gap: "12px" }}>
+              {activeEvent && (
+                <button 
+                  className="btn-secondary" 
+                  style={{ 
+                    background: "var(--accent-pink)", 
+                    color: "#fff", 
+                    border: "none", 
+                    padding: "8px 18px", 
+                    fontSize: "13px", 
+                    fontWeight: "900", 
+                    cursor: "pointer", 
+                    borderRadius: "2px",
+                    boxShadow: "0 0 10px rgba(255, 0, 127, 0.6)",
+                    letterSpacing: "1px"
+                  }}
+                  onClick={() => {
+                    setView("event");
+                  }}
+                >
+                  部屋に入る (ENTER)
+                </button>
+              )}
+              {myUserId && (
+                <button 
+                  style={{ 
+                    background: "#cc0000", 
+                    border: "none", 
+                    color: "#fff",
+                    padding: "8px 18px", 
+                    fontSize: "13px", 
+                    fontWeight: "900", 
+                    cursor: "pointer", 
+                    borderRadius: "2px"
+                  }}
+                  onClick={() => handleDeleteUser(myUserId)}
+                >
+                  募集取消/退出
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      )}
+      <section>
+        <h2>対戦・マッチの新規募集（登録）</h2>
         <form onSubmit={onUserSubmit}>
+          <div className="register-type-box">
+            <div className="radio-group">
+              <label className="radio-label" style={{ color: "#fff", margin: 0 }}>
+                <input 
+                  type="radio" 
+                  name="regType" 
+                  checked={registerType === "host"} 
+                  onChange={() => setRegisterType("host")} 
+                />
+                部屋を立てて募集する (ホスト)
+              </label>
+              <label className="radio-label" style={{ color: "#fff", margin: 0 }}>
+                <input 
+                  type="radio" 
+                  name="regType" 
+                  checked={registerType === "guest"} 
+                  onChange={() => setRegisterType("guest")} 
+                />
+                希望時間・タイトルを登録して待つ (ゲスト)
+              </label>
+            </div>
+          </div>
+          
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
             <label style={{ margin: 0 }}>
               ニックネーム
-              <input type="text" placeholder="匿名ユーザー" value={userForm.nickname} onChange={(e) => setUserForm({ ...userForm, nickname: e.target.value })} required />
+              <input type="text" placeholder="ニックネーム" value={userForm.nickname} onChange={(e) => setUserForm({ ...userForm, nickname: e.target.value })} required />
             </label>
-            <label style={{ margin: 0 }}>
-              開催場所の指定
-              <input type="text" placeholder="例: 7A201教室、ラウンジ奥" value={userForm.customLocation} onChange={(e) => setUserForm({ ...userForm, customLocation: e.target.value })} required />
-            </label>
+            
+            {registerType === "host" ? (
+              <label style={{ margin: 0 }}>
+                開催場所の指定（部屋・教室）
+                <select 
+                  value={userForm.customLocation || "7A101"} 
+                  onChange={(e) => setUserForm({ ...userForm, customLocation: e.target.value })} 
+                  required
+                >
+                  <option value="7A101">7A101</option>
+                  <option value="7A102">7A102</option>
+                  <option value="7A103">7A103</option>
+                  <option value="7A104">7A104</option>
+                  <option value="7A105">7A105</option>
+                  <option value="7A106">7A106</option>
+                  <option value="7B106">7B106</option>
+                  <option value="7C102">7C102</option>
+                  <option value="7C103">7C103</option>
+                  <option value="7A202">7A202</option>
+                  <option value="7A203">7A203</option>
+                  <option value="7A204">7A204</option>
+                  <option value="7A205">7A205</option>
+                  <option value="7A206">7A206</option>
+                  <option value="7A207">7A207</option>
+                  <option value="7A210">7A210</option>
+                  <option value="7A211">7A211</option>
+                  <option value="7B204">7B204</option>
+                  <option value="7B205">7B205</option>
+                  <option value="7C201">7C201</option>
+                  <option value="7C202">7C202</option>
+                  <option value="7C203">7C203</option>
+                </select>
+              </label>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", fontSize: "0.85rem", color: "#888", paddingLeft: "10px", marginTop: "20px" }}>
+                ※ ゲスト登録の場合、マッチング成立時に自動で部屋が割り当てられます。
+              </div>
+            )}
           </div>
-
+          {registerType === "host" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+              <label style={{ margin: 0 }}>
+                募集総人数（自分含む）
+                <select value={userForm.capacity} onChange={(e) => setUserForm({ ...userForm, capacity: e.target.value })}>
+                  <option value="2">2人</option>
+                  <option value="3">3人</option>
+                  <option value="4">4人</option>
+                  <option value="5">5人</option>
+                </select>
+              </label>
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "24px" }}>
             <div>
-              <label style={{ marginBottom: "6px" }}>一言コメント（任意）</label>
+              <label>一言コメント（任意）</label>
               <input 
                 type="text" 
                 placeholder="例: 初心者歓迎、プロコン持参します" 
@@ -547,27 +809,25 @@ function App() {
               />
             </div>
             <div>
-              <label style={{ marginBottom: "6px" }}>連絡用SNSアカウント (任意 / マッチ成立時のみ相手に開示)</label>
+              <label>連絡用SNS (任意 / マッチ成立時のみ開示)</label>
               <input 
                 type="text" 
-                placeholder="例: Discord ID、Xユーザー名など" 
+                placeholder="例: Discord ID, X ID" 
                 value={userForm.snsContact} 
                 onChange={(e) => setUserForm({ ...userForm, snsContact: e.target.value })} 
               />
             </div>
           </div>
-
           <div style={{ marginBottom: "24px" }}>
-            <label style={{ marginBottom: "8px" }}>空き時間の選択（登録必須）</label>
+            <label>空き時間の選択（登録必須）</label>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <button type="button" className="btn-select-trigger" onClick={() => setActiveModal("standard")}>
                 曜日・時限リストから選ぶ
               </button>
-              <button type="button" className="btn-select-trigger custom-btn" onClick={() => setActiveModal("custom")}>
+              <button type="button" className="btn-select-trigger btn-secondary" onClick={() => setActiveModal("custom")}>
                 例外的な時間を自由入力する
               </button>
             </div>
-
             <div style={{ marginTop: "12px", background: "#0a0a0a", border: "1px solid #222", padding: "14px" }}>
               <span className="tag-category-title" style={{ color: "#ff007f" }}>現在設定中の空き時間リスト (クリックで取り消し):</span>
               {userForm.availability.length === 0 ? (
@@ -593,9 +853,8 @@ function App() {
               )}
             </div>
           </div>
-
           <div style={{ marginBottom: "24px" }}>
-            <label style={{ marginBottom: "8px" }}>プレイしたいタイトル</label>
+            <label>希望タイトル</label>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               {HOBBY_TAG_GROUPS.map((group) => (
                 <div key={group.category} className="tag-group-box">
@@ -618,11 +877,12 @@ function App() {
               <button type="button" onClick={handleAddCustomTag} className="btn-secondary" style={{ padding: "0 20px" }}>追加</button>
             </div>
           </div>
-
-          <button type="submit" disabled={loading} style={{ width: "100%" }}>募集を公開掲示板に投稿する</button>
+          <button type="submit" disabled={loading} style={{ width: "100%" }}>
+            {registerType === "host" ? "公開掲示板に部屋を立てる (投稿)" : "メンバー登録してマッチングを待つ"}
+          </button>
         </form>
       </section>
-
+      
       {activeModal === "standard" && (
         <div className="modal-overlay">
           <div className="modal-mini-window">
@@ -653,7 +913,7 @@ function App() {
           </div>
         </div>
       )}
-
+      
       {activeModal === "custom" && (
         <div className="modal-overlay">
           <div className="modal-mini-window">
@@ -680,19 +940,69 @@ function App() {
           </div>
         </div>
       )}
-
+      
+      {activeModal === "join_guest" && (
+        <div className="modal-overlay">
+          <div className="modal-mini-window">
+            <div className="modal-header">
+              <h2>部屋に入る (ゲスト参加登録)</h2>
+              <button className="btn-close-modal" onClick={() => setActiveModal("none")}>×</button>
+            </div>
+            <form onSubmit={handleJoinEventSubmit}>
+              <div style={{ marginBottom: "16px" }}>
+                <label>合流先ゲーム</label>
+                <div style={{ color: "#ff007f", fontWeight: "bold", fontSize: "1.1rem" }}>
+                  {joiningHostInfo?.game}
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <label>開催場所 / ホスト</label>
+                <div style={{ color: "#00ffff", fontSize: "0.95rem" }}>
+                  @{joiningHostInfo?.hostUser?.room_name} ({joiningHostInfo?.hostUser?.nickname} の部屋)
+                </div>
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <label>ニックネーム (必須)</label>
+                <input 
+                  type="text" 
+                  placeholder="ニックネームを入力" 
+                  value={guestForm.nickname} 
+                  onChange={(e) => setGuestForm({ ...guestForm, nickname: e.target.value })} 
+                  required 
+                />
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <label>一言コメント (任意)</label>
+                <input 
+                  type="text" 
+                  placeholder="例: よろしくお願いします！" 
+                  value={guestForm.comment} 
+                  onChange={(e) => setGuestForm({ ...guestForm, comment: e.target.value })} 
+                />
+              </div>
+              <div style={{ marginBottom: "24px" }}>
+                <label>連絡用SNS (任意 / マッチ成立時のみ開示)</label>
+                <input 
+                  type="text" 
+                  placeholder="例: Discord ID, X ID" 
+                  value={guestForm.snsContact} 
+                  onChange={(e) => setGuestForm({ ...guestForm, snsContact: e.target.value })} 
+                />
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <button type="submit" disabled={loading} style={{ flex: 1 }}>参加する</button>
+                <button type="button" className="btn-secondary" onClick={() => setActiveModal("none")} style={{ flex: 1 }}>キャンセル</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      
       {/* 公開募集掲示板 */}
       <section style={{ border: "2px solid #ff007f" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
-          <div>
-            <h2 style={{ margin: 0, border: "none", padding: 0 }}>LOBBY BOARD（公開募集一覧）</h2>
-          </div>
-          {/* 班員のマッチングバッチ実行の代わりとなるマッチング走査トリガー */}
-          <button className="btn-secondary" style={{ fontSize: "12px", padding: "8px 14px", background: "#ff007f", color: "#fff" }} onClick={handleTriggerMatchingEngine}>
-            3人以上の自動マッチング判定を実行
-          </button>
+          <h2>LOBBY BOARD（公開募集ロビー一覧）</h2>
         </div>
-
         <div style={{ background: "#0d0d0d", border: "1px solid #222", padding: "16px", marginBottom: "20px", display: "flex", gap: "16px", flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ flex: 2, minWidth: "180px" }}>
             <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>ゲームタイトルで絞り込み</span>
@@ -704,10 +1014,9 @@ function App() {
               style={{ margin: 0, padding: "8px 12px", fontSize: "13px" }}
             />
           </div>
-
           <div style={{ flex: 3, minWidth: "260px" }}>
             <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>
-              {filterImmediateOnly ? "今すぐマッチ・マクロが有効です" : "希望曜日でしぼり込み"}
+              {filterImmediateOnly ? "今すぐマッチ有効中" : "希望曜日でしぼり込み"}
             </span>
             <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
               <button 
@@ -732,9 +1041,8 @@ function App() {
               ))}
             </div>
           </div>
-
           <div style={{ flex: 1, minWidth: "160px" }}>
-            <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>タイム枠ブースト</span>
+            <span style={{ fontSize: "11px", color: "#aaa", display: "block", marginBottom: "4px", fontWeight: "bold" }}>今すぐ遊べる部屋のみ表示</span>
             <button
               type="button"
               onClick={() => {
@@ -752,46 +1060,50 @@ function App() {
                 textAlign: "center"
               }}
             >
-              {filterImmediateOnly ? "ON: 今すぐ遊べる枠" : "OFF: 今すぐ遊べる枠"}
+              {filterImmediateOnly ? "ON (有効)" : "OFF (無効)"}
             </button>
           </div>
         </div>
-
         {filteredAndVisibleUsers.length === 0 ? (
-          <div className="empty-state" style={{ padding: "40px 20px" }}>
+          <div className="empty-state" style={{ padding: "40px 20px", textAlign: "center", color: "#666" }}>
             待機中のエントリー募集はありません。
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "16px" }}>
             {filteredAndVisibleUsers.map((u) => {
-              const rawNickname = u.nickname || "";
-              const locationPart = rawNickname.split("@")[1] || "学内";
-              const displayLocation = locationPart.split(" [")[0];
-              const cleanName = rawNickname.split(" ")[0];
-              
-              let displayComment = "";
-              if (rawNickname.includes("[COMM:")) {
-                displayComment = rawNickname.split("[COMM:")[1].split("]")[0];
-              }
-        
+              const isHost = u.room_name !== null && u.room_name !== undefined;
+              const displayLocation = u.room_name || "マッチ部屋へ自動割り当て";
+              const canJoin = isHost && myUserId === null;
               return (
-                <div key={u.id} className="suggestion-card" style={{ borderColor: "#333", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                <div key={u.id} className="suggestion-card" style={{ borderColor: isHost ? "var(--accent-cyan)" : "#333", boxShadow: isHost ? "0 0 10px rgba(0, 255, 255, 0.15)" : "none" }}>
                   <div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
-                        <span className="white-tag">{displayLocation}</span>
+                        {isHost ? (
+                          <span className="white-tag" style={{ background: "var(--accent-cyan)", color: "#000", border: "none", fontWeight: "bold" }}>ROOM CREATOR (@{displayLocation})</span>
+                        ) : (
+                          <span className="white-tag" style={{ background: "#222", color: "#aaa", border: "none" }}>JOINER (探し中)</span>
+                        )}
+                        <span className="white-tag" style={{ background: "#222", color: "#aaa", marginLeft: "6px", border: "none" }}>
+                          {u.capacity}人募集
+                        </span>
                       </div>
                       <button className="btn-delete-small" onClick={() => handleDeleteUser(u.id)}>削除</button>
                     </div>
-
                     <div style={{ margin: "14px 0 4px 0", fontSize: "16px", fontWeight: "bold" }}>
-                      USER: {cleanName}
+                      USER: {u.nickname}
                     </div>
-
-                    {displayComment && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", margin: "8px 0" }}>
+                      {u.games?.map((game) => (
+                        <span key={game} className="badge" style={{ background: "rgba(0, 255, 255, 0.1)", border: "1px solid var(--accent-cyan)", color: "#fff", fontSize: "0.75rem", padding: "4px 8px" }}>
+                          {game}
+                        </span>
+                      ))}
+                    </div>
+                    {u.comment && (
                       <div style={{
                         background: "#111",
-                        borderLeft: "2px solid #ff007f",
+                        borderLeft: "2px solid var(--accent-cyan)",
                         padding: "6px 10px",
                         fontSize: "13px",
                         color: "#ddd",
@@ -799,14 +1111,13 @@ function App() {
                         fontStyle: "italic",
                         wordBreak: "break-all"
                       }}>
-                        {displayComment}
+                        {u.comment}
                       </div>
                     )}
-
                     <div style={{ fontSize: "12px", color: "#888", marginBottom: "12px", marginTop: "10px" }}>
                       <div>希望スケジュール:</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "4px" }}>
-                        {u.availability?.map((av: any, i: number) => {
+                        {u.availability?.map((av, i) => {
                           const showTxt = av.end === "CUSTOM" ? av.start : `${av.start}-${av.end}`;
                           return (
                             <span key={i} style={{ background: "#111", padding: "2px 6px", border: "1px solid #222", color: "#fff" }}>
@@ -817,20 +1128,41 @@ function App() {
                       </div>
                     </div>
                   </div>
-
                   <div className="action-zone" style={{ marginTop: "auto" }}>
-                    <div className="action-title">（開発用デバッグ割り込み合流）:</div>
-                    <div className="direct-btn-group">
-                      {u.games?.map((game: string) => (
-                        <button
-                          key={game}
-                          className="btn-direct-confirm"
-                          onClick={() => handleManualJoinLobbyUser(u, game, u.availability[0] || { day: "Mon", start: "12:15", end: "13:30" })}
-                        >
-                          {game}
-                        </button>
-                      ))}
-                    </div>
+                    {isHost ? (
+                      <button
+                        className="btn-direct-confirm"
+                        disabled={!canJoin}
+                        style={{
+                          background: canJoin ? "var(--accent-cyan)" : "#222",
+                          color: canJoin ? "#000" : "#555",
+                          border: canJoin ? "none" : "1px solid #333",
+                          cursor: canJoin ? "pointer" : "not-allowed",
+                          opacity: canJoin ? 1 : 0.4,
+                          boxShadow: canJoin ? "0 0 10px rgba(0, 255, 255, 0.4)" : "none",
+                          fontWeight: canJoin ? "bold" : "normal",
+                          width: "100%",
+                          padding: "10px 0",
+                          fontSize: "14px",
+                          letterSpacing: "1px"
+                        }}
+                        onClick={() => handleManualJoinLobbyUser(u, u.games?.[0] || "", u.availability?.[0] || { day: "Mon", start: "12:15", end: "13:30" })}
+                      >
+                        部屋に入る (ENTER ROOM)
+                      </button>
+                    ) : (
+                      <div style={{
+                        textAlign: "center",
+                        fontSize: "12px",
+                        color: "var(--accent-cyan)",
+                        padding: "8px",
+                        border: "1px dashed rgba(0, 255, 255, 0.2)",
+                        background: "rgba(0, 255, 255, 0.02)",
+                        letterSpacing: "1px"
+                      }}>
+                        MATCHMAKING (対戦相手を探しています)
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -838,48 +1170,47 @@ function App() {
           </div>
         )}
       </section>
-
+      
       {/* 履歴・ログ表示 */}
       <div style={{ textAlign: "center", marginTop: "40px" }}>
         <button type="button" className="btn-secondary" style={{ fontSize: "12px", padding: "6px 16px" }} onClick={() => setShowDebug(!showDebug)}>
           {showDebug ? "対戦履歴を非表示" : "対戦成立履歴・ログを表示"}
         </button>
       </div>
-
       {showDebug && (
         <section style={{ marginTop: "16px", borderColor: "#222" }}>
           <h2>MATCH HISTORY & DATABASE LOG</h2>
           <div style={{ marginBottom: "20px" }}>
             <h3>成立した対戦マッチ一覧</h3>
-            {matches.length === 0 ? <p className="muted">履歴はありません</p> : (
+            {matches.length === 0 ? <p style={{ color: "#666" }}>履歴はありません</p> : (
               <div className="table-responsive">
                 <table className="grid-table" style={{ background: "transparent" }}>
                   <thead>
                     <tr>
-                      <th>ホスト</th>
-                      <th>参戦プレイヤー</th>
-                      <th>場所</th>
-                      <th>対戦種目</th>
+                      <th>部屋を立てた人 (ホスト)</th>
+                      <th>部屋に参加した人</th>
+                      <th>場所 (部屋名)</th>
+                      <th>種目</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {matches.map((m: any) => (
+                    {matches.map((m) => (
                       <tr key={m.id}>
-                        <td>{m.student?.nickname?.split(" ")[0] || m.studentId}</td>
-                        <td>{m.professor?.nickname?.split(" ")[0] || m.professorId}</td>
+                        <td>{m.student?.nickname || m.studentId}</td>
+                        <td>{m.professor?.nickname || m.professorId}</td>
                         <td>{m.room?.name || "確定場所"}</td>
                         <td style={{ color: "#ff007f" }}>{m.matchedGame}</td>
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  }
 
-export default App;
+  export default App;
